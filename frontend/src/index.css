@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+* {
+  -webkit-user-select: none;
+  user-select: none;
+}
+input, textarea, pre, [contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Hide scrollbar but keep scroll functionality */
+.scrollbar-thin {
+  scrollbar-width: none;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes miniPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+@keyframes miniFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.mini-fade-in {
+  animation: miniFadeIn 0.2s ease-out;
+}

@@ -5,7 +5,7 @@ import { load } from '@tauri-apps/plugin-store'
 import { listen } from '@tauri-apps/api/event'
 import { GifMakerTab } from './components/GifMakerTab'
 import { SettingsTab } from './components/SettingsTab'
-import { getStore, DEFAULT_CHAR } from './lib/store'
+import { getStore, DEFAULT_CHAR, loadCharacters } from './lib/store'
 import { formatTokens, formatTime, formatDuration, saveAgentCharMap } from './lib/agents'
 import type { AgentMetrics } from './lib/types'
 
@@ -180,7 +180,7 @@ function MiniCharPairing({ characters, currentChar, onSelect }: {
           )}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-gray-900">Mini 角色</div>
+          <div className="text-sm font-semibold text-gray-900">看板娘</div>
           <div className="text-xs text-gray-400">Notch 上显示的角色</div>
         </div>
         <div ref={ref} className="relative shrink-0" style={{ minWidth: 140 }}>
@@ -367,7 +367,7 @@ export default function Mini() {
 
   // Claude Code
   const [claudeSessions, setClaudeSessions] = useState<any[]>([])
-  const [claudeCharName, setClaudeCharName] = useState('')
+  const [claudeCharName, setClaudeCharName] = useState('default')
   const [selectedClaudeSession, setSelectedClaudeSession] = useState<string | null>(null)
   const [claudeConversation, setClaudeConversation] = useState<any[]>([])
 
@@ -422,17 +422,19 @@ export default function Mini() {
 
   const fetchAgents = useCallback(async () => {
     try {
+      const chars = await loadCharacters()
+      setCharacters(chars)
+    } catch (e) { console.warn('[fetchAgents] loadCharacters failed:', e) }
+    try {
       const store = await load('settings.json', { defaults: {}, autoSave: true })
       const oc = await getOcParams()
       const [agentList, charMap] = await Promise.all([
         invoke('get_agents', oc) as Promise<AgentInfo[]>,
         store.get('agent_char_map') as Promise<Record<string, string> | null>,
       ])
-      const chars = (await store.get('characters')) as CharacterMeta[] | null
       setAgents(agentList)
-      setCharacters(chars || [])
       setAgentCharMap(charMap || {})
-    } catch { /* ignore */ }
+    } catch (e) { console.warn('[fetchAgents] get_agents failed:', e) }
   }, [])
 
   const pollHealth = useCallback(async () => {
@@ -521,7 +523,7 @@ export default function Mini() {
       if (typeof cc === 'boolean') setEnableClaudeCode(cc)
       const snd = await store.get('sound_enabled')
       if (typeof snd === 'boolean') setSoundEnabled(snd)
-      const ccChar = ((await store.get('claude_char')) as string) || ''
+      const ccChar = ((await store.get('claude_char')) as string) || 'default'
       setClaudeCharName(ccChar)
     })()
   }, [])
@@ -942,7 +944,7 @@ export default function Mini() {
                                     key={agent.id}
                                     agent={agent}
                                     characters={characters}
-                                    currentChar={agentCharMap[agent.id] || ''}
+                                    currentChar={agentCharMap[agent.id] || 'default'}
                                     onSelect={async (charName) => {
                                       const updated = { ...agentCharMap, [agent.id]: charName }
                                       setAgentCharMap(updated)
@@ -973,7 +975,7 @@ export default function Mini() {
                           </>
                         )}
 
-                        {/* Mini 角色 (notch 上显示的角色) */}
+                        {/* 看板娘 (notch 上显示的角色) */}
                         <div className="pt-4 border-t border-gray-200">
                           <MiniCharPairing
                             characters={characters}

@@ -9,6 +9,28 @@ use tauri::{
 #[cfg(unix)]
 use libc;
 
+/// Fix PATH for macOS GUI apps which only get /usr/bin:/bin:/usr/sbin:/sbin.
+/// openclaw is a Node.js script installed via pnpm, so both `openclaw` and `node`
+/// must be reachable via PATH.
+fn fix_path() {
+    for shell in ["/bin/zsh", "/bin/bash"] {
+        if let Ok(output) = std::process::Command::new(shell)
+            .args(["-lic", "echo $PATH"])
+            .output()
+        {
+            if output.status.success() {
+                let shell_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !shell_path.is_empty() {
+                    std::env::set_var("PATH", &shell_path);
+                    log::info!("[fix_path] PATH set to: {}", &shell_path);
+                    return;
+                }
+            }
+        }
+    }
+    log::warn!("[fix_path] could not get PATH from login shell");
+}
+
 /// Managed state: tracks the PID of the currently running `openclaw agent` subprocess.
 /// Used by interrupt_agent to SIGINT the active turn.
 struct ActiveAgentPid {
@@ -2180,6 +2202,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
+            // Fix PATH so openclaw (Node.js script) and node are both reachable
+            fix_path();
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

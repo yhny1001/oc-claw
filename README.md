@@ -21,16 +21,10 @@
 ## Install
 
 > [!TIP]
-> **Tell your OpenClaw agent:**
+> **Tell your AI agent (OpenClaw / Claude Code):**
 >
 > ```
 > Install oc-claw: curl -fsSL https://raw.githubusercontent.com/rainnoon/oc-claw/main/install.sh | bash
-> ```
->
-> **Tell Claude Code:**
->
-> ```
-> Install oc-claw: download the latest DMG from GitHub repo rainnoon/oc-claw releases, mount it with hdiutil, copy oc-claw.app to /Applications, remove quarantine attribute, then launch it. Note: the mount point path may contain spaces, handle it properly.
 > ```
 
 > [!NOTE]

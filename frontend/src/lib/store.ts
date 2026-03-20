@@ -7,14 +7,16 @@ export async function getStore() {
   return load('settings.json', { defaults: {}, autoSave: true })
 }
 
+const ASSET_PREFIX = import.meta.env.DEV ? '/assets' : 'localasset://localhost'
+
 export const DEFAULT_CHAR: CharacterMeta = {
   name: 'default',
   workGifs: [],
   restGifs: [],
   miniActions: {
     top: [
-      '/assets/default/mini/top/sleep.gif',
-      '/assets/default/mini/top/work.gif',
+      `${ASSET_PREFIX}/default/mini/top/sleep.gif`,
+      `${ASSET_PREFIX}/default/mini/top/work.gif`,
     ],
   },
 }

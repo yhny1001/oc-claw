@@ -284,6 +284,8 @@ fn assets_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 async fn scan_characters(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
     let base = assets_dir(&app)?;
     let mut results = vec![];
+    // In dev mode, use /assets/ (served by vite). In production, use localasset:// protocol.
+    let url_prefix = if cfg!(debug_assertions) { "/assets" } else { "localasset://localhost" };
 
     let entries = std::fs::read_dir(&base).map_err(|e| e.to_string())?;
     for entry in entries.filter_map(|e| e.ok()) {
@@ -302,7 +304,7 @@ async fn scan_characters(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>
                 if let Ok(files) = std::fs::read_dir(pet_dir.join(subdir)) {
                     for f in files.filter_map(|f| f.ok()) {
                         if f.path().extension().map(|e| e == "gif").unwrap_or(false) {
-                            target.push(format!("/assets/{}/pet/{}/{}", name, subdir, f.file_name().to_string_lossy()));
+                            target.push(format!("{}/{}/pet/{}/{}", url_prefix, name, subdir, f.file_name().to_string_lossy()));
                         }
                     }
                 }
@@ -322,7 +324,7 @@ async fn scan_characters(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>
                         for f in files.filter_map(|f| f.ok()) {
                             if f.path().extension().map(|e| e == "gif").unwrap_or(false) {
                                 gifs.push(serde_json::Value::String(
-                                    format!("/assets/{}/mini/{}/{}", name, cat_name, f.file_name().to_string_lossy())
+                                    format!("{}/{}/mini/{}/{}", url_prefix, name, cat_name, f.file_name().to_string_lossy())
                                 ));
                             }
                         }
@@ -2201,6 +2203,27 @@ fn start_claude_socket_server(claude_state: Arc<Mutex<HashMap<String, ClaudeSess
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
+        .register_uri_scheme_protocol("localasset", |ctx, req| {
+            let path = req.uri().path();
+            // path is like /charname/mini/top/work.gif
+            let resource_dir = ctx.app_handle().path().resource_dir().unwrap_or_default();
+            let file_path = resource_dir.join("assets").join(path.trim_start_matches('/'));
+            match std::fs::read(&file_path) {
+                Ok(data) => {
+                    let mime = if path.ends_with(".gif") { "image/gif" }
+                        else if path.ends_with(".png") { "image/png" }
+                        else { "application/octet-stream" };
+                    tauri::http::Response::builder()
+                        .header("Content-Type", mime)
+                        .body(data)
+                        .unwrap()
+                }
+                Err(_) => tauri::http::Response::builder()
+                    .status(404)
+                    .body(Vec::new())
+                    .unwrap(),
+            }
+        })
         .setup(|app| {
             // Fix PATH so openclaw (Node.js script) and node are both reachable
             fix_path();

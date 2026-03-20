@@ -1,2 +1,4 @@
 User-agent: *
 Allow: /
+
+Sitemap: https://rainnoon.github.io/oc-claw/sitemap-index.xml

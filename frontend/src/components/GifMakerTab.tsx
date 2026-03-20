@@ -7,7 +7,7 @@ import {
 } from '../utils/spriteUtils'
 import { exportGif } from '../utils/gifExport'
 import type { PipelineConfig, PipelineItem, CardStatus } from '../lib/types'
-import { loadCharacters } from '../lib/store'
+import { loadCharacters, getStore } from '../lib/store'
 import { loadPipelines, loadPromptFile, PIPELINE_CHROMA } from '../lib/pipeline'
 
 // Canvas-based frame player
@@ -50,6 +50,9 @@ export function GifMakerTab() {
   const [saveMsg, setSaveMsg] = useState('')
   const refCacheRef = useRef<{ base64: string; mimeType: string } | null>(null)
   const [fps, setFps] = useState(4)
+  const [geminiKey, setGeminiKey] = useState('')
+  const [geminiUrl, setGeminiUrl] = useState('')
+  const [showKey, setShowKey] = useState(false)
 
   useEffect(() => {
     loadPipelines().then((p) => {
@@ -59,6 +62,12 @@ export function GifMakerTab() {
       else if (p.length > 0 && !pipelineId) setPipelineId(p[0].id)
     }).catch(() => {})
     loadCharacters().then((chars) => setCharacters(chars.map((c) => c.name)))
+    getStore().then(async (store) => {
+      const key = ((await store.get('gemini_api_key')) as string) || import.meta.env.VITE_GEMINI_API_KEY || ''
+      const url = ((await store.get('gemini_base_url')) as string) || import.meta.env.VITE_GEMINI_BASE_URL || ''
+      setGeminiKey(key)
+      setGeminiUrl(url)
+    })
   }, [])
 
   const pipeline = pipelines.find((p) => p.id === pipelineId) ?? null
@@ -127,14 +136,14 @@ export function GifMakerTab() {
     try {
       const { generateImage, base64ToImage } = await import('../utils/nanoBanana')
       const [ref, prompt] = await Promise.all([ensureRefBase64(), loadPromptFile(pl.presets[idx].promptFile)])
-      const res = await generateImage({ prompt, imageBase64: ref.base64, imageMimeType: ref.mimeType, aspectRatio: '1:1' })
+      const res = await generateImage({ prompt, imageBase64: ref.base64, imageMimeType: ref.mimeType, aspectRatio: '1:1', apiKey: geminiKey, baseUrl: geminiUrl || undefined })
       const img = await base64ToImage(res.imageBase64, res.mimeType)
       updateItem(idx, { status: 'processing' })
       processImage(idx, img, pl)
     } catch (err: any) {
       updateItem(idx, { status: 'error', error: err.message || String(err) })
     }
-  }, [ensureRefBase64, updateItem, processImage])
+  }, [ensureRefBase64, updateItem, processImage, geminiKey, geminiUrl])
 
   const uploadSpriteSheet = useCallback(async (idx: number, file: File, pl: PipelineConfig) => {
     updateItem(idx, { status: 'processing', error: undefined })
@@ -279,6 +288,36 @@ export function GifMakerTab() {
     <div className="flex-1 overflow-auto p-8 bg-gray-50">
       <div className="max-w-5xl mx-auto space-y-6">
         {/* Header */}
+
+        {/* Gemini API Key */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+          <div className="flex items-center gap-4">
+            <div className="flex-1 min-w-0">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Gemini API Key</label>
+              <div className="flex gap-2">
+                <input
+                  type={showKey ? 'text' : 'password'}
+                  value={geminiKey}
+                  onChange={async (e) => { setGeminiKey(e.target.value); const store = await getStore(); await store.set('gemini_api_key', e.target.value); await store.save() }}
+                  placeholder="填入你的 Gemini API Key"
+                  className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400 font-mono"
+                />
+                <button onClick={() => setShowKey(!showKey)} className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg">
+                  {showKey ? '隐藏' : '显示'}
+                </button>
+              </div>
+            </div>
+            <div className="min-w-0" style={{ width: 220 }}>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Base URL <span className="text-gray-400">(可选)</span></label>
+              <input
+                value={geminiUrl}
+                onChange={async (e) => { setGeminiUrl(e.target.value); const store = await getStore(); await store.set('gemini_base_url', e.target.value); await store.save() }}
+                placeholder="默认 Google 官方"
+                className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500/20 focus:border-orange-400 font-mono"
+              />
+            </div>
+          </div>
+        </div>
 
         {/* Top Controls */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">

@@ -373,7 +373,7 @@ export default function Mini() {
 
   // Feature toggles
   const [enableOpenClaw, setEnableOpenClaw] = useState(true)
-  const [enableClaudeCode, setEnableClaudeCode] = useState(false)
+  const [enableClaudeCode, setEnableClaudeCode] = useState(true)
   const [soundEnabled, setSoundEnabled] = useState(true)
 
   // Settings mode: panel becomes wider, shows settings content

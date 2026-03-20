@@ -30,7 +30,7 @@ export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDe
   const [token, setToken] = useState('')
   const [testResult, setTestResult] = useState('')
   const [enableOpenClaw, setEnableOpenClaw] = useState(true)
-  const [enableClaudeCode, setEnableClaudeCode] = useState(false)
+  const [enableClaudeCode, setEnableClaudeCode] = useState(true)
   const [hookStatus, setHookStatus] = useState('')
 
   useEffect(() => {

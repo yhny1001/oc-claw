@@ -1,7 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 
-const BASE_URL = import.meta.env.VITE_GEMINI_BASE_URL || 'http://1003.2.gptuu.cc:1003';
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
+const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
 const DEFAULT_MODEL = 'gemini-3-pro-image-preview';
 
 export interface GenerateImageParams {
@@ -12,6 +11,8 @@ export interface GenerateImageParams {
   temperature?: number;
   topP?: number;
   model?: string;
+  apiKey: string;
+  baseUrl?: string;
 }
 
 export interface GenerateImageResult {
@@ -42,8 +43,11 @@ export function base64ToImage(base64: string, mimeType: string): Promise<HTMLIma
 }
 
 export async function generateImage(params: GenerateImageParams): Promise<GenerateImageResult> {
+  if (!params.apiKey) throw new Error('请先在设置中填写 Gemini API Key');
+
   const model = params.model || DEFAULT_MODEL;
-  const url = `${BASE_URL}/v1beta/models/${model}:generateContent?key=${API_KEY}`;
+  const baseUrl = params.baseUrl || DEFAULT_BASE_URL;
+  const url = `${baseUrl}/v1beta/models/${model}:generateContent?key=${params.apiKey}`;
 
   const parts: Record<string, unknown>[] = [];
 

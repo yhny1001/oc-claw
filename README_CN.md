@@ -21,11 +21,16 @@
 ## 安装
 
 > [!TIP]
-> **直接丢给你的 AI agent：**
->
+> **丢给你的 OpenClaw agent：**
 >
 > ```
 > 帮我安装 oc-claw：curl -fsSL https://raw.githubusercontent.com/rainnoon/oc-claw/main/install.sh | bash
+> ```
+>
+> **丢给 Claude Code：**
+>
+> ```
+> 帮我安装 oc-claw：从 GitHub 仓库 rainnoon/oc-claw 的 releases 下载最新 DMG，用 hdiutil 挂载后将 oc-claw.app 复制到 /Applications，移除隔离属性，然后启动。注意：挂载点路径可能含空格，需正确处理。
 > ```
 
 > [!NOTE]

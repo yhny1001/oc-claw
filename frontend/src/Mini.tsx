@@ -921,8 +921,8 @@ export default function Mini() {
 
             {/* ===== Settings content ===== */}
             {settingsMode ? (
-              <div data-no-drag className="scrollbar-thin" style={{ flex: 1, overflow: 'auto', margin: 8, marginTop: 0, borderRadius: 12, minHeight: 0 }}>
-                <div className="h-full bg-[#fafafa] text-gray-800 font-sans antialiased scrollbar-thin" style={{ borderRadius: 12, overflow: 'auto' }}>
+              <div data-no-drag className="scrollbar-thin" style={{ flex: 1, overflow: 'hidden', margin: 8, marginTop: 0, borderRadius: 12, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                <div className="bg-[#fafafa] text-gray-800 font-sans antialiased scrollbar-thin" style={{ borderRadius: '12px 12px 0 0', overflow: 'auto', flex: 1, minHeight: 0 }}>
                   {settingsNav === 'create' && <GifMakerTab onBack={() => setSettingsNav('create')} />}
                   {settingsNav === 'pairing' && (
                     <div className="h-full overflow-y-auto bg-slate-50 p-6 scrollbar-thin">
@@ -1000,6 +1000,20 @@ export default function Mini() {
                       <SettingsTab showWorkDetail={showWorkDetail} onToggleWorkDetail={toggleWorkDetail} />
                     </div>
                   )}
+                </div>
+                <div style={{
+                  background: '#1a1a1a', padding: '8px 14px',
+                  borderRadius: '0 0 12px 12px', flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <span
+                    onClick={() => invoke('open_url', { url: 'https://github.com/rainnoon/oc-claw' })}
+                    style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, cursor: 'pointer' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.8)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255,255,255,0.5)')}
+                  >
+                    GitHub · 项目地址
+                  </span>
                 </div>
               </div>
             ) : (!inAgentDetail && !selectedClaudeSession && !selectedSessionKey) ? (

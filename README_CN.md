@@ -25,13 +25,14 @@
 >
 > *"帮我安装 oc-claw：`curl -fsSL https://raw.githubusercontent.com/rainnoon/oc-claw/main/install.sh | bash`"*
 
-或自己在终端运行：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/rainnoon/oc-claw/main/install.sh | bash
-```
-
-也可以从 [Releases](https://github.com/rainnoon/oc-claw/releases) 手动下载 DMG。安装后需在终端运行 `xattr -cr /Applications/oc-claw.app` 解除 macOS 安全限制（应用未经 Apple 开发者签名）。
+> [!NOTE]
+> **或自己在终端运行：**
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/rainnoon/oc-claw/main/install.sh | bash
+> ```
+>
+> 也可以从 [Releases](https://github.com/rainnoon/oc-claw/releases) 手动下载 DMG。安装后需运行 `xattr -cr /Applications/oc-claw.app` 解除 macOS 安全限制。
 
 ## 技术栈
 

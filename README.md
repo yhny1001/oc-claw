@@ -25,13 +25,14 @@
 >
 > *"Install oc-claw: `curl -fsSL https://raw.githubusercontent.com/rainnoon/oc-claw/main/install.sh | bash`"*
 
-Or run it yourself in Terminal:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/rainnoon/oc-claw/main/install.sh | bash
-```
-
-You can also download the DMG from [Releases](https://github.com/rainnoon/oc-claw/releases). After installing, run `xattr -cr /Applications/oc-claw.app` to bypass macOS Gatekeeper (the app is not signed with an Apple Developer certificate).
+> [!NOTE]
+> **Or run it yourself in Terminal:**
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/rainnoon/oc-claw/main/install.sh | bash
+> ```
+>
+> You can also download the DMG from [Releases](https://github.com/rainnoon/oc-claw/releases). After installing, run `xattr -cr /Applications/oc-claw.app` to bypass macOS Gatekeeper.
 
 ## Tech Stack
 

@@ -110,6 +110,24 @@ async fn lsof_active_agents() -> std::collections::HashSet<String> {
     active
 }
 
+/// Generic helper: call OpenClaw remote API via /tools/invoke
+async fn invoke_tool(url: &str, token: &str, tool: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/tools/invoke", url))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({ "tool": tool, "args": args }))
+        .send()
+        .await
+        .map_err(|e| format!("remote request failed: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("remote API error ({}): {}", status, text));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("parse remote response: {} body: {}", e, &text[..text.len().min(200)]))
+}
+
 fn sessions_json_path(agent_id: &str) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let agent_dir = if agent_id.is_empty() { "main" } else { agent_id };
@@ -396,7 +414,17 @@ async fn delete_character_gif(app: tauri::AppHandle, char_name: String, subfolde
 }
 
 #[tauri::command]
-async fn get_agents() -> Result<Vec<AgentInfo>, String> {
+async fn get_agents(mode: Option<String>, url: Option<String>, token: Option<String>) -> Result<Vec<AgentInfo>, String> {
+    if mode.as_deref() == Some("remote") {
+        let url = url.as_deref().unwrap_or("");
+        let token = token.as_deref().unwrap_or("");
+        let result = invoke_tool(url, token, "agents_list", serde_json::json!({})).await?;
+        let agents_val = result.get("result").unwrap_or(&result);
+        let agents: Vec<AgentInfo> = serde_json::from_value(agents_val.clone()).map_err(|e| e.to_string())?;
+        return Ok(agents);
+    }
+
+    // === local mode (original) ===
     let output = tokio::process::Command::new("openclaw")
         .args(["agents", "list", "--json"])
         .output()
@@ -409,7 +437,6 @@ async fn get_agents() -> Result<Vec<AgentInfo>, String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Find the JSON array in stdout
     let json_start = stdout.find('[').ok_or("no JSON array in agents output")?;
     let json_end = stdout.rfind(']').ok_or("no closing bracket")? + 1;
     let agents: Vec<AgentInfo> =
@@ -418,11 +445,29 @@ async fn get_agents() -> Result<Vec<AgentInfo>, String> {
 }
 
 #[tauri::command]
-async fn get_health() -> Result<HealthResult, String> {
+async fn get_health(mode: Option<String>, url: Option<String>, token: Option<String>) -> Result<HealthResult, String> {
+    if mode.as_deref() == Some("remote") {
+        let url = url.as_deref().unwrap_or("");
+        let token = token.as_deref().unwrap_or("");
+        let result = invoke_tool(url, token, "sessions_list", serde_json::json!({"activeMinutes": 5})).await?;
+        // Parse remote response: extract active agent IDs from sessions
+        let empty_arr = vec![];
+        let sessions = result.get("result").and_then(|r| r.as_array()).unwrap_or(&empty_arr);
+        let mut agent_active: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+        for s in sessions {
+            let agent_id = s["agentId"].as_str().unwrap_or("main").to_string();
+            let active = s["active"].as_bool().unwrap_or(false);
+            let entry = agent_active.entry(agent_id).or_insert(false);
+            if active { *entry = true; }
+        }
+        let agents = agent_active.into_iter().map(|(agent_id, active)| AgentHealth { agent_id, active }).collect();
+        return Ok(HealthResult { agents });
+    }
+
+    // === local mode (original) ===
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let agents_dir = std::path::PathBuf::from(&home).join(".openclaw/agents");
 
-    // One lsof call for all agents
     let active_set = lsof_active_agents().await;
 
     let agents = std::fs::read_dir(&agents_dir)
@@ -577,7 +622,47 @@ fn truncate_str(s: &str, max: usize) -> String {
 }
 
 #[tauri::command]
-async fn get_agent_metrics(agent_id: String) -> Result<AgentMetrics, String> {
+async fn get_agent_metrics(agent_id: String, mode: Option<String>, url: Option<String>, token: Option<String>) -> Result<AgentMetrics, String> {
+    if mode.as_deref() == Some("remote") {
+        let url = url.as_deref().unwrap_or("");
+        let tok = token.as_deref().unwrap_or("");
+        let result = invoke_tool(url, tok, "agent_metrics", serde_json::json!({"agentId": agent_id})).await?;
+        let m = result.get("result").unwrap_or(&result);
+        let metrics = AgentMetrics {
+            agent_id: agent_id.clone(),
+            active: m["active"].as_bool().unwrap_or(false),
+            current_model: m["currentModel"].as_str().map(|s| s.to_string()),
+            thinking_level: m["thinkingLevel"].as_str().map(|s| s.to_string()),
+            active_session_count: m["activeSessionCount"].as_u64().unwrap_or(0) as usize,
+            current_task: m["currentTask"].as_str().map(|s| s.to_string()),
+            current_tool: m["currentTool"].as_str().map(|s| s.to_string()),
+            total_tokens: m["totalTokens"].as_u64().unwrap_or(0),
+            input_tokens: m["inputTokens"].as_u64().unwrap_or(0),
+            output_tokens: m["outputTokens"].as_u64().unwrap_or(0),
+            cache_read_tokens: m["cacheReadTokens"].as_u64().unwrap_or(0),
+            cache_write_tokens: m["cacheWriteTokens"].as_u64().unwrap_or(0),
+            total_cost: m["totalCost"].as_f64().unwrap_or(0.0),
+            tool_calls: m["toolCalls"].as_array().map(|arr| arr.iter().filter_map(|tc| {
+                Some(ToolCallStat { name: tc["name"].as_str()?.to_string(), count: tc["count"].as_u64()? as usize })
+            }).collect()).unwrap_or_default(),
+            recent_actions: m["recentActions"].as_array().map(|arr| arr.iter().filter_map(|a| {
+                Some(RecentAction {
+                    action_type: a["type"].as_str().unwrap_or("text").to_string(),
+                    summary: a["summary"].as_str()?.to_string(),
+                    detail: a["detail"].as_str().map(|s| s.to_string()),
+                    timestamp: a["timestamp"].as_str().map(|s| s.to_string()),
+                })
+            }).collect()).unwrap_or_default(),
+            error_count: m["errorCount"].as_u64().unwrap_or(0) as usize,
+            message_count: m["messageCount"].as_u64().unwrap_or(0) as usize,
+            session_start: m["sessionStart"].as_str().map(|s| s.to_string()),
+            last_activity: m["lastActivity"].as_str().map(|s| s.to_string()),
+            channel: m["channel"].as_str().map(|s| s.to_string()),
+        };
+        return Ok(metrics);
+    }
+
+    // === local mode (original) ===
     let active_set = lsof_active_agents().await;
     let agent_dir = if agent_id.is_empty() { "main" } else { &agent_id };
     let active = active_set.contains(agent_dir);
@@ -1501,7 +1586,35 @@ fn extract_last_messages(content: &str) -> (Option<String>, Option<String>) {
 }
 
 #[tauri::command]
-async fn get_agent_sessions(agent_id: String) -> Result<Vec<MiniSessionInfo>, String> {
+async fn get_agent_sessions(agent_id: String, mode: Option<String>, url: Option<String>, token: Option<String>) -> Result<Vec<MiniSessionInfo>, String> {
+    if mode.as_deref() == Some("remote") {
+        let url = url.as_deref().unwrap_or("");
+        let token = token.as_deref().unwrap_or("");
+        let result = invoke_tool(url, token, "sessions_list", serde_json::json!({"agentId": agent_id, "activeMinutes": 60})).await?;
+        let sessions_val = result.get("result").unwrap_or(&result);
+        let empty_arr = vec![];
+        let arr = sessions_val.as_array().unwrap_or(&empty_arr);
+        let mut sessions: Vec<MiniSessionInfo> = arr.iter().filter_map(|s| {
+            let key = s["key"].as_str().or(s["sessionId"].as_str())?.to_string();
+            if key.contains(":cron:") { return None; }
+            Some(MiniSessionInfo {
+                key: key.clone(),
+                agent_id: s["agentId"].as_str().unwrap_or(&agent_id).to_string(),
+                session_id: s["sessionId"].as_str().unwrap_or(&key).to_string(),
+                label: key.clone(),
+                channel: s["channel"].as_str().map(|s| s.to_string()),
+                updated_at: s["updatedAt"].as_u64().unwrap_or(0),
+                active: s["active"].as_bool().unwrap_or(false),
+                last_user_msg: s["lastUserMsg"].as_str().map(|s| s.to_string()),
+                last_assistant_msg: s["lastAssistantMsg"].as_str().map(|s| s.to_string()),
+            })
+        }).collect();
+        sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        sessions.truncate(20);
+        return Ok(sessions);
+    }
+
+    // === local mode (original) ===
     let path = sessions_json_path(&agent_id);
     let content = tokio::fs::read_to_string(&path)
         .await
@@ -1655,7 +1768,24 @@ async fn get_session_messages(agent_id: String, session_key: String) -> Result<V
 /// Lightweight: returns set of "agentId:sessionKey" that are currently active.
 /// Only does lsof + reads sessions.json (no .jsonl content parsing).
 #[tauri::command]
-async fn get_active_sessions() -> Result<Vec<String>, String> {
+async fn get_active_sessions(mode: Option<String>, url: Option<String>, token: Option<String>) -> Result<Vec<String>, String> {
+    if mode.as_deref() == Some("remote") {
+        let url = url.as_deref().unwrap_or("");
+        let token = token.as_deref().unwrap_or("");
+        let result = invoke_tool(url, token, "sessions_list", serde_json::json!({"activeMinutes": 5})).await?;
+        let empty_arr = vec![];
+        let sessions = result.get("result").and_then(|r| r.as_array()).unwrap_or(&empty_arr);
+        let keys: Vec<String> = sessions.iter()
+            .filter(|s| s["active"].as_bool().unwrap_or(false))
+            .filter_map(|s| {
+                let agent_id = s["agentId"].as_str().unwrap_or("main");
+                let key = s["key"].as_str().or(s["sessionId"].as_str())?;
+                Some(format!("{}:{}", agent_id, key))
+            }).collect();
+        return Ok(keys);
+    }
+
+    // === local mode (original) ===
     let open_paths = lsof_open_jsonl_paths().await;
     if open_paths.is_empty() { return Ok(vec![]); }
 
@@ -1673,7 +1803,6 @@ async fn get_active_sessions() -> Result<Vec<String>, String> {
         for (key, val) in map.iter() {
             let session_file = val["sessionFile"].as_str().unwrap_or("");
             let session_id = val["sessionId"].as_str().unwrap_or("");
-            // Check sessionFile or inferred path
             let file_path = if !session_file.is_empty() {
                 session_file.to_string()
             } else if !session_id.is_empty() {

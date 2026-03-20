@@ -334,6 +334,15 @@ function PairingRow({ agent, characters, currentChar, onSelect }: {
   )
 }
 
+async function getOcParams(): Promise<{ mode?: string; url?: string; token?: string }> {
+  const store = await load('settings.json', { defaults: {}, autoSave: true })
+  const mode = ((await store.get('oc_mode')) as string) || 'local'
+  if (mode !== 'remote') return {}
+  const url = ((await store.get('gateway_url')) as string) || ''
+  const token = ((await store.get('gateway_token')) as string) || ''
+  return { mode, url, token }
+}
+
 export default function Mini() {
   const [expanded, setExpanded] = useState(false)
   const [showPanel, setShowPanel] = useState(false)
@@ -414,8 +423,9 @@ export default function Mini() {
   const fetchAgents = useCallback(async () => {
     try {
       const store = await load('settings.json', { defaults: {}, autoSave: true })
+      const oc = await getOcParams()
       const [agentList, charMap] = await Promise.all([
-        invoke('get_agents') as Promise<AgentInfo[]>,
+        invoke('get_agents', oc) as Promise<AgentInfo[]>,
         store.get('agent_char_map') as Promise<Record<string, string> | null>,
       ])
       const chars = (await store.get('characters')) as CharacterMeta[] | null
@@ -427,7 +437,8 @@ export default function Mini() {
 
   const pollHealth = useCallback(async () => {
     try {
-      const health = (await invoke('get_health')) as { agents: AgentHealth[] }
+      const oc = await getOcParams()
+      const health = (await invoke('get_health', oc)) as { agents: AgentHealth[] }
       const hMap: Record<string, boolean> = {}
       health.agents.forEach((a) => { hMap[a.agentId] = a.active })
       setHealthMap(hMap)
@@ -436,11 +447,12 @@ export default function Mini() {
 
   const fetchAllSessions = useCallback(async () => {
     if (agents.length === 0) { setAllSessions([]); return }
+    const oc = await getOcParams()
     const results: MiniSessionInfo[] = []
     await Promise.all(
       agents.map(async (agent) => {
         try {
-          const s = (await invoke('get_agent_sessions', { agentId: agent.id })) as MiniSessionInfo[]
+          const s = (await invoke('get_agent_sessions', { agentId: agent.id, ...oc })) as MiniSessionInfo[]
           results.push(...s)
         } catch { /* ignore */ }
       })
@@ -467,7 +479,8 @@ export default function Mini() {
 
   const pollActiveStatus = useCallback(async () => {
     try {
-      const activeKeys = (await invoke('get_active_sessions')) as string[]
+      const oc = await getOcParams()
+      const activeKeys = (await invoke('get_active_sessions', oc)) as string[]
       setAnySessionActive(activeKeys.length > 0)
       const activeSet = new Set(activeKeys)
       setAllSessions(prev => {
@@ -576,7 +589,8 @@ export default function Mini() {
     let cancelled = false
     const fetchMetrics = async () => {
       try {
-        const m = (await invoke('get_agent_metrics', { agentId: selectedAgentId })) as AgentMetrics
+        const oc = await getOcParams()
+        const m = (await invoke('get_agent_metrics', { agentId: selectedAgentId, ...oc })) as AgentMetrics
         if (!cancelled) setMetrics(m)
       } catch { if (!cancelled) setMetrics(null) }
     }

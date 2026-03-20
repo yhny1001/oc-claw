@@ -25,6 +25,7 @@ function Toggle({ checked, onChange, label, desc }: { checked: boolean, onChange
 }
 
 export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDetail: boolean, onToggleWorkDetail: (v: boolean) => void }) {
+  const [ocMode, setOcMode] = useState<'local' | 'remote'>('local')
   const [url, setUrl] = useState('http://localhost:4446')
   const [token, setToken] = useState('')
   const [testResult, setTestResult] = useState('')
@@ -35,6 +36,8 @@ export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDe
   useEffect(() => {
     ;(async () => {
       const store = await getStore()
+      const m = (await store.get('oc_mode')) as string
+      if (m === 'remote') setOcMode('remote')
       setUrl(((await store.get('gateway_url')) as string) || 'http://localhost:4446')
       setToken(((await store.get('gateway_token')) as string) || '')
       const oc = await store.get('enable_openclaw')
@@ -46,6 +49,7 @@ export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDe
 
   const saveSettings = async () => {
     const store = await getStore()
+    await store.set('oc_mode', ocMode)
     await store.set('gateway_url', url)
     await store.set('gateway_token', token)
     await store.save()
@@ -54,10 +58,15 @@ export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDe
   const testConnection = async () => {
     try {
       await saveSettings()
-      const store = await getStore()
-      const agentId = ((await store.get('tracked_agent')) as string) || 'main'
-      const result: any = await invoke('get_status', { gatewayUrl: url, token, agentId })
-      setTestResult(`连接成功! ${result.sessions.length} 个 session`)
+      if (ocMode === 'remote') {
+        const result: any = await invoke('get_agents', { mode: 'remote', url, token })
+        setTestResult(`连接成功! ${result.length} 个 agent`)
+      } else {
+        const store = await getStore()
+        const agentId = ((await store.get('tracked_agent')) as string) || 'main'
+        const result: any = await invoke('get_status', { gatewayUrl: url, token, agentId })
+        setTestResult(`连接成功! ${result.sessions.length} 个 session`)
+      }
     } catch (e: any) {
       setTestResult(`失败: ${String(e)}`)
     }
@@ -101,26 +110,48 @@ export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDe
       {enableOpenClaw && (
         <>
           <section className="mb-12">
-            <h2 className="text-xl font-bold text-gray-900 mb-6">OpenClaw Gateway</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-6">OpenClaw 连接</h2>
             <div className="space-y-6">
               <div>
-                <label className="block text-base font-medium text-gray-900 mb-2">Gateway URL</label>
-                <input
-                  type="text"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  className="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded focus:ring-1 focus:ring-gray-400 focus:border-gray-400 block p-2.5 outline-none transition-all"
-                />
+                <label className="block text-base font-medium text-gray-900 mb-2">连接模式</label>
+                <div className="flex bg-gray-100 rounded-lg p-1 w-fit">
+                  {(['local', 'remote'] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={async () => { setOcMode(m); setTestResult(''); const store = await getStore(); await store.set('oc_mode', m); await store.save() }}
+                      className={`text-sm font-medium px-4 py-1.5 rounded-md transition-colors ${ocMode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {m === 'local' ? '本地' : '远程'}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-sm text-gray-400 mt-2">
+                  {ocMode === 'local' ? '读取本机 ~/.openclaw 目录，需要本地安装 OpenClaw' : '通过 API 连接远程服务器上的 OpenClaw'}
+                </p>
               </div>
-              <div>
-                <label className="block text-base font-medium text-gray-900 mb-2">Token</label>
-                <input
-                  type="password"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  className="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded focus:ring-1 focus:ring-gray-400 focus:border-gray-400 block p-2.5 outline-none transition-all"
-                />
-              </div>
+              {ocMode === 'remote' && (
+                <>
+                  <div>
+                    <label className="block text-base font-medium text-gray-900 mb-2">服务器 URL</label>
+                    <input
+                      type="text"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      placeholder="http://your-server:4446"
+                      className="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded focus:ring-1 focus:ring-gray-400 focus:border-gray-400 block p-2.5 outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-base font-medium text-gray-900 mb-2">Token</label>
+                    <input
+                      type="password"
+                      value={token}
+                      onChange={(e) => setToken(e.target.value)}
+                      className="w-full bg-white border border-gray-300 text-gray-900 text-sm rounded focus:ring-1 focus:ring-gray-400 focus:border-gray-400 block p-2.5 outline-none transition-all"
+                    />
+                  </div>
+                </>
+              )}
               <div className="flex items-center gap-3 pt-2">
                 <button onClick={testConnection} className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 text-sm py-1.5 px-3 rounded transition-colors">
                   测试连接

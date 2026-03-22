@@ -102,13 +102,13 @@
     "presets": [
       {
         "id": "top-sleep",
-        "name": "Top (Work + Sleep)",
-        "description": "5x5 pixel art, rows 1-2 talking/working, rows 3-5 sleeping (32x32 per cell)",
+        "name": "Top (Work + Eat)",
+        "description": "5x5 pixel art, rows 1-2 talking/working, rows 3-5 eating/compact (32x32 per cell)",
         "promptFile": "/prompt/top/sleep.txt",
         "cols": 5,
         "rows": 5,
         "needsRefImage": true,
-        "rowLabels": ["work-1", "work-2", "sleep-1", "sleep-2", "sleep-3"]
+        "rowLabels": ["work-1", "work-2", "compact-1", "compact-2", "compact-3"]
       }
     ]
   }

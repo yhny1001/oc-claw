@@ -45,16 +45,25 @@ interface SessionSlot {
   agent: AgentInfo
   char?: CharacterMeta
   isWorking: boolean
+  petState?: PetState
 }
 
 const MAX_SLOTS = 10
 
-function getMiniGif(char: CharacterMeta | undefined, isWorking: boolean, useTop = false): string | undefined {
+type PetState = 'idle' | 'working' | 'compacting'
+
+function getMiniGif(char: CharacterMeta | undefined, petState: PetState | boolean, useTop = false): string | undefined {
+  // backward compat: boolean → PetState
+  const state: PetState = typeof petState === 'boolean' ? (petState ? 'working' : 'idle') : petState
   const c = (char?.miniActions && Object.values(char.miniActions).flat().length > 0) ? char : DEFAULT_CHAR
   if (!c?.miniActions) return undefined
   if (useTop && c.miniActions['top']?.length) {
     const topGifs = c.miniActions['top']
-    if (isWorking) {
+    if (state === 'compacting') {
+      const compact = topGifs.find((g) => g.includes('compact'))
+      if (compact) return compact
+    }
+    if (state === 'working') {
       const work = topGifs.find((g) => g.includes('work'))
       if (work) return work
     }
@@ -64,9 +73,13 @@ function getMiniGif(char: CharacterMeta | undefined, isWorking: boolean, useTop 
   }
   const allGifs = Object.values(c.miniActions).flat()
   if (allGifs.length === 0) return undefined
+  if (state === 'compacting') {
+    const compactGifs = allGifs.filter((g) => g.includes('compact'))
+    if (compactGifs.length > 0) return compactGifs[0]
+  }
   const idleGifs = allGifs.filter((g) => g.includes('idle'))
   const actionGifs = allGifs.filter((g) => !g.includes('idle'))
-  if (isWorking && actionGifs.length > 0) return actionGifs[0]
+  if (state === 'working' && actionGifs.length > 0) return actionGifs[0]
   return idleGifs[0] || allGifs[0]
 }
 
@@ -625,8 +638,9 @@ export default function Mini() {
   })
   const claudeSlots: SessionSlot[] = claudeSessions.map((cs, i) => {
     const isActive = cs.status === 'processing' || cs.status === 'tool_running'
+    const isCompacting = cs.status === 'compacting'
     const char = characters.find((c) => c.name === claudeCharName) || DEFAULT_CHAR
-    return { agentId: `claude:${cs.sessionId}`, sessionIdx: ocSlots.length + i, agent: { id: `claude:${cs.sessionId}`, identityName: 'Claude', identityEmoji: '🤖' }, char, isWorking: isActive }
+    return { agentId: `claude:${cs.sessionId}`, sessionIdx: ocSlots.length + i, agent: { id: `claude:${cs.sessionId}`, identityName: 'Claude', identityEmoji: '🤖' }, char, isWorking: isActive || isCompacting, petState: isCompacting ? 'compacting' as PetState : isActive ? 'working' as PetState : 'idle' as PetState }
   })
   const sessionSlots = [...ocSlots, ...claudeSlots].slice(0, MAX_SLOTS)
 
@@ -743,9 +757,11 @@ export default function Mini() {
     return () => window.removeEventListener('focus', onFocus)
   }, [expanded, expand])
 
+  const claudeCompacting = claudeSessions.some(cs => cs.status === 'compacting')
   const claudeWorking = claudeSessions.some(cs => cs.status === 'processing' || cs.status === 'tool_running')
-  const hasWorking = anySessionActive || Object.values(healthMap).some(Boolean) || claudeWorking
-  const miniGif = getMiniGif(miniChar ?? undefined, hasWorking, true)
+  const hasWorking = anySessionActive || Object.values(healthMap).some(Boolean) || claudeWorking || claudeCompacting
+  const mainPetState: PetState = claudeCompacting ? 'compacting' : hasWorking ? 'working' : 'idle'
+  const miniGif = getMiniGif(miniChar ?? undefined, mainPetState, true)
   const inAgentDetail = selectedAgentId !== null
   const selectedAgent = agents.find(a => a.id === selectedAgentId)
 
@@ -904,12 +920,12 @@ export default function Mini() {
                     style={{
                       background: 'none', border: 'none',
                       color: soundEnabled ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.15)', fontSize: 14,
-                      cursor: 'pointer', padding: '4px 6px',
+                      cursor: 'pointer', padding: '4px 6px', paddingTop: '5px',
                       position: 'relative',
                     }}
                     title={soundEnabled ? '提示音: 开' : '提示音: 关'}
                   >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
                       <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
                       {!soundEnabled && <line x1="1" y1="1" x2="23" y2="23" strokeWidth="3"/>}
@@ -1056,7 +1072,7 @@ export default function Mini() {
                   )}
 
                   {sessionSlots.map((slot, idx) => {
-                    const gif = getMiniGif(slot.char, slot.isWorking, true)
+                    const gif = getMiniGif(slot.char, slot.petState ?? (slot.isWorking ? 'working' : 'idle'), true)
                     const row = idx < 6 ? 0 : 1
                     const col = row === 0 ? idx : idx - 6
                     const cols = row === 0 ? Math.min(sessionSlots.length, 6) : Math.min(sessionSlots.length - 6, 4)

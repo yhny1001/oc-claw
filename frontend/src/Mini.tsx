@@ -657,7 +657,7 @@ export default function Mini() {
       } else {
         await invoke('set_mini_expanded', { expanded: false })
       }
-    }, 480)
+    }, 300)
   }, [])
 
   const enterSettings = useCallback(async () => {
@@ -673,7 +673,7 @@ export default function Mini() {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => setShowPanel(true))
       })
-    }, 480)
+    }, 300)
   }, [])
 
   const exitSettings = useCallback(async () => {
@@ -688,7 +688,7 @@ export default function Mini() {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => setShowPanel(true))
       })
-    }, 480)
+    }, 300)
   }, [])
 
   const toggleWorkDetail = async (val: boolean) => {
@@ -734,36 +734,11 @@ export default function Mini() {
     }
   }, [expanded, pinned, settingsMode, collapse])
 
-  const isDragging = useRef(false)
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.detail !== 1 || (e.target as HTMLElement).closest('[data-no-drag]')) return
-    isDragging.current = false
-    const startX = e.screenX
-    const startY = e.screenY
-    const onMouseMove = (ev: MouseEvent) => {
-      if (!isDragging.current && (Math.abs(ev.screenX - startX) > 3 || Math.abs(ev.screenY - startY) > 3)) {
-        isDragging.current = true
-        getCurrentWindow().startDragging()
-      }
-    }
-    const onMouseUp = () => {
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-      if (!isDragging.current) expand()
-    }
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
-  }
 
-  // When window gains focus while collapsed (first click from another app), expand immediately
+
   useEffect(() => {
     if (expanded) return
-    const onFocus = () => {
-      // Small delay to let mousedown/drag detection run first
-      setTimeout(() => {
-        if (!isDragging.current) expand()
-      }, 50)
-    }
+    const onFocus = () => expand()
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [expanded, expand])
@@ -787,11 +762,11 @@ export default function Mini() {
       {!expanded && !hiding && (
         <div
           id="mini-panel"
-          onMouseDown={handleMouseDown}
+          onClick={() => expand()}
           style={{
             width: '100%', height: '100%',
             display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-            cursor: 'grab',
+            cursor: 'pointer',
             pointerEvents: 'auto',
           }}
         >
@@ -828,8 +803,8 @@ export default function Mini() {
           position: 'absolute', top: 0,
           left: '50%',
           transform: 'translateX(-50%)',
-          width: showPanel ? panelW : 200,
-          maxHeight: showPanel ? panelH : 32,
+          width: showPanel ? panelW : 60,
+          maxHeight: showPanel ? panelH : 0,
           overflow: 'hidden',
           background: '#1a1a1a',
           borderRadius: showPanel ? (settingsMode ? '0 0 16px 16px' : '0 0 24px 24px') : '0 0 14px 14px',
@@ -837,16 +812,16 @@ export default function Mini() {
             ? '0 8px 32px rgba(0,0,0,0.7)'
             : '0 2px 8px rgba(0,0,0,0.3)',
           transition: showPanel
-            ? 'width 0.42s cubic-bezier(0.34, 1.3, 0.64, 1), max-height 0.42s cubic-bezier(0.34, 1.3, 0.64, 1), border-radius 0.42s cubic-bezier(0.34, 1.3, 0.64, 1), box-shadow 0.35s ease'
-            : 'width 0.45s cubic-bezier(0.4, 0, 0.2, 1), max-height 0.45s cubic-bezier(0.4, 0, 0.2, 1), border-radius 0.45s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s ease',
+            ? 'width 0.35s cubic-bezier(0.16, 1, 0.3, 1), max-height 0.35s cubic-bezier(0.16, 1, 0.3, 1), border-radius 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease'
+            : 'width 0.3s cubic-bezier(0.25, 0.1, 0.25, 1), max-height 0.3s cubic-bezier(0.25, 0.1, 0.25, 1), border-radius 0.3s cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 0.25s ease',
         }}>
           <div style={{
             opacity: showPanel ? 1 : 0,
             transform: showPanel ? 'scale(1) translateY(0)' : 'scale(0.8) translateY(-8px)',
             transformOrigin: 'top center',
             transition: showPanel
-              ? 'opacity 0.35s ease, transform 0.35s ease'
-              : 'opacity 0.15s ease-out, transform 0.15s ease-out',
+              ? 'opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
+              : 'opacity 0.12s ease-out, transform 0.12s ease-out',
             height: settingsMode ? '100vh' : 'auto',
             display: settingsMode ? 'flex' : 'block',
             flexDirection: 'column',

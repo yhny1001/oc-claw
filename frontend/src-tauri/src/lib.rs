@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// Saved position of the mini pet window before expanding, so we can restore it on collapse.
-static MINI_SAVED_POS: Mutex<Option<(f64, f64)>> = Mutex::new(None);
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -1161,7 +1159,7 @@ async fn open_mini(app: tauri::AppHandle) -> Result<(), String> {
                     if let Some((sx, sy, sw, sh)) = screen_frame {
                         let win_w = 60.0;
                         let win_h = 45.0;
-                        let x = sx + sw / 2.0 + 140.0;
+                        let x = sx + sw / 2.0 + 80.0;
                         let y = sy + sh - win_h;
                         let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(win_w, win_h));
                         unsafe {
@@ -1189,7 +1187,8 @@ async fn open_mini(app: tauri::AppHandle) -> Result<(), String> {
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .visible(false);
+        .visible(false)
+        .accept_first_mouse(true); // single click from any app
 
     let win = builder.build().map_err(|e| e.to_string())?;
 
@@ -1233,7 +1232,7 @@ async fn open_mini(app: tauri::AppHandle) -> Result<(), String> {
                     // Start collapsed: small window right of notch
                     let win_w = 60.0;
                     let win_h = 45.0;
-                    let x = sx + sw / 2.0 + 140.0;
+                    let x = sx + sw / 2.0 + 80.0;
                     let y = sy + sh - win_h;
                     let frame = NSRect::new(
                         NSPoint::new(x, y),
@@ -1300,12 +1299,6 @@ async fn set_mini_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), 
                         let _: () = msg_send![obj, setLevel: 27isize];
                     }
                     if expanded {
-                        // Save current pet position before expanding
-                        let cur_frame: NSRect = unsafe { msg_send![obj, frame] };
-                        if let Ok(mut pos) = MINI_SAVED_POS.lock() {
-                            *pos = Some((cur_frame.origin.x, cur_frame.origin.y));
-                        }
-                        // Expand to 400x560 centered on screen (notch area)
                         let win_w = 400.0;
                         let win_h = 560.0;
                         let x = sx + (sw - win_w) / 2.0;
@@ -1315,13 +1308,10 @@ async fn set_mini_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), 
                             let _: () = msg_send![obj, setFrame: frame, display: true, animate: false];
                         }
                     } else {
-                        // Collapse: restore to saved pet position
                         let win_w = 60.0;
                         let win_h = 45.0;
-                        let (x, y) = MINI_SAVED_POS.lock()
-                            .ok()
-                            .and_then(|pos| *pos)
-                            .unwrap_or((sx + sw / 2.0 + 140.0, sy + sh - win_h));
+                        let x = sx + sw / 2.0 + 80.0;
+                        let y = sy + sh - win_h;
                         let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(win_w, win_h));
                         unsafe {
                             let _: () = msg_send![obj, setFrame: frame, display: true, animate: false];
@@ -1372,7 +1362,7 @@ async fn set_mini_size(app: tauri::AppHandle, restore: bool) -> Result<(), Strin
                         // Restore to collapsed: small window right of notch
                         let win_w = 60.0;
                         let win_h = 45.0;
-                        let x = sx + sw / 2.0 + 140.0;
+                        let x = sx + sw / 2.0 + 80.0;
                         let y = sy + sh - win_h;
                         let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(win_w, win_h));
                         unsafe {
@@ -2364,7 +2354,7 @@ pub fn run() {
                         if let Some((sx, sy, sw, sh)) = screen_frame {
                             let win_w = 60.0;
                             let win_h = 45.0;
-                            let x = sx + sw / 2.0 + 140.0;
+                            let x = sx + sw / 2.0 + 80.0;
                             let y = sy + sh - win_h;
                             let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(win_w, win_h));
                             unsafe {

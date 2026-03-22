@@ -32,6 +32,9 @@ export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDe
   const [enableOpenClaw, setEnableOpenClaw] = useState(true)
   const [enableClaudeCode, setEnableClaudeCode] = useState(true)
   const [hookStatus, setHookStatus] = useState('')
+  const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string; hasUpdate: boolean; url: string } | null>(null)
+  const [updateChecking, setUpdateChecking] = useState(false)
+  const [updating, setUpdating] = useState(false)
 
   useEffect(() => {
     ;(async () => {
@@ -45,6 +48,7 @@ export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDe
       const cc = await store.get('enable_claudecode')
       if (typeof cc === 'boolean') setEnableClaudeCode(cc)
     })()
+    invoke('check_for_update').then((info: any) => setUpdateInfo(info)).catch(() => {})
   }, [])
 
   const saveSettings = async () => {
@@ -171,6 +175,61 @@ export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDe
         <h2 className="text-xl font-bold text-gray-900 mb-6">显示设置</h2>
         <div className="space-y-6">
           <Toggle checked={showWorkDetail} onChange={onToggleWorkDetail} label="显示工作详情" desc="工作中时在 pet 上显示最新动态" />
+        </div>
+      </section>
+
+      <hr className="border-gray-200 mb-10" />
+
+      <section className="mb-12">
+        <h2 className="text-xl font-bold text-gray-900 mb-6">关于 & 更新</h2>
+        <div className="space-y-4">
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-gray-500">当前版本: {updateInfo?.current || '...'}</span>
+            {updateInfo?.hasUpdate && (
+              <span className="text-xs font-medium text-green-600 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+                v{updateInfo.latest} 可用
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={async () => {
+                setUpdateChecking(true)
+                try {
+                  const info = await invoke('check_for_update') as any
+                  setUpdateInfo(info)
+                } catch (e: any) {
+                  setUpdateInfo(null)
+                  setTestResult(`检查更新失败: ${String(e)}`)
+                }
+                setUpdateChecking(false)
+              }}
+              disabled={updateChecking}
+              className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 text-sm py-1.5 px-3 rounded transition-colors"
+            >
+              {updateChecking ? '检查中...' : '检查更新'}
+            </button>
+            {updateInfo?.hasUpdate && (
+              <button
+                onClick={async () => {
+                  setUpdating(true)
+                  try {
+                    await invoke('run_update')
+                  } catch (e: any) {
+                    setUpdating(false)
+                    setTestResult(`更新失败: ${String(e)}`)
+                  }
+                }}
+                disabled={updating}
+                className="bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 text-sm py-1.5 px-4 rounded transition-colors font-medium"
+              >
+                {updating ? '更新中...' : '立即更新'}
+              </button>
+            )}
+            {updateInfo && !updateInfo.hasUpdate && (
+              <span className="text-sm text-green-600">已是最新版本 ✓</span>
+            )}
+          </div>
         </div>
       </section>
     </div>

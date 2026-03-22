@@ -1938,6 +1938,74 @@ async fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let current = app.config().version.clone().unwrap_or_default();
+    let client = reqwest::Client::builder()
+        .user_agent("oc-claw")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get("https://api.github.com/repos/rainnoon/oc-claw/releases/latest")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let latest = json["tag_name"].as_str().unwrap_or("").trim_start_matches('v');
+    let has_update = version_cmp(latest, &current);
+    Ok(serde_json::json!({
+        "current": current,
+        "latest": latest,
+        "hasUpdate": has_update,
+        "url": json["html_url"].as_str().unwrap_or(""),
+    }))
+}
+
+fn version_cmp(latest: &str, current: &str) -> bool {
+    let parse = |s: &str| -> Vec<u32> {
+        s.split('.').filter_map(|p| p.parse().ok()).collect()
+    };
+    let l = parse(latest);
+    let c = parse(current);
+    for i in 0..l.len().max(c.len()) {
+        let lv = l.get(i).copied().unwrap_or(0);
+        let cv = c.get(i).copied().unwrap_or(0);
+        if lv > cv { return true; }
+        if lv < cv { return false; }
+    }
+    false
+}
+
+#[tauri::command]
+async fn run_update() -> Result<(), String> {
+    let script = r#"
+        set -e
+        REPO="rainnoon/oc-claw"
+        APP_NAME="oc-claw"
+        INSTALL_DIR="/Applications"
+        DMG_URL=$(curl -sL "https://api.github.com/repos/${REPO}/releases/latest" \
+          | grep "browser_download_url.*\.dmg" \
+          | head -1 \
+          | cut -d '"' -f 4)
+        [ -z "$DMG_URL" ] && exit 1
+        TMPDIR=$(mktemp -d)
+        DMG_PATH="${TMPDIR}/${APP_NAME}.dmg"
+        curl -sL "$DMG_URL" -o "$DMG_PATH"
+        MOUNT_POINT=$(hdiutil attach "$DMG_PATH" -nobrowse -quiet | tail -1 | sed 's/.*\(\/Volumes\/.*\)/\1/' | xargs)
+        rm -rf "${INSTALL_DIR}/${APP_NAME}.app"
+        cp -R "${MOUNT_POINT}/${APP_NAME}.app" "${INSTALL_DIR}/"
+        hdiutil detach "$MOUNT_POINT" -quiet
+        xattr -cr "${INSTALL_DIR}/${APP_NAME}.app"
+        rm -rf "$TMPDIR"
+        open "${INSTALL_DIR}/${APP_NAME}.app"
+    "#;
+    tokio::process::Command::new("bash")
+        .args(["-c", script])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn get_claude_conversation(session_id: String) -> Result<Vec<ChatMessage>, String> {
     let home = dirs::home_dir().ok_or("no home dir")?;
     let claude_dir = home.join(".claude").join("projects");
@@ -2335,7 +2403,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_status, send_chat, open_detail_panel, save_character_gif, delete_character_assets, delete_character_gif, get_agents, get_health, get_agent_metrics, interrupt_agent, scan_characters, get_agent_extra_info, open_mini, close_mini, set_mini_expanded, set_mini_size, get_agent_sessions, get_session_messages, get_active_sessions, proxy_post, play_sound, get_claude_sessions, get_claude_conversation, install_claude_hooks, remove_claude_session, open_url])
+        .invoke_handler(tauri::generate_handler![get_status, send_chat, open_detail_panel, save_character_gif, delete_character_assets, delete_character_gif, get_agents, get_health, get_agent_metrics, interrupt_agent, scan_characters, get_agent_extra_info, open_mini, close_mini, set_mini_expanded, set_mini_size, get_agent_sessions, get_session_messages, get_active_sessions, proxy_post, play_sound, get_claude_sessions, get_claude_conversation, install_claude_hooks, remove_claude_session, open_url, check_for_update, run_update])
         .manage(ActiveAgentPid { pid: Mutex::new(None) })
         .manage(ClaudeState { sessions: Arc::new(Mutex::new(HashMap::new())) })
         .run(tauri::generate_context!())

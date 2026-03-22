@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+/// Saved position of the mini pet window before expanding, so we can restore it on collapse.
+static MINI_SAVED_POS: Mutex<Option<(f64, f64)>> = Mutex::new(None);
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -1297,7 +1300,12 @@ async fn set_mini_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), 
                         let _: () = msg_send![obj, setLevel: 27isize];
                     }
                     if expanded {
-                        // Expand to 400x560 centered
+                        // Save current pet position before expanding
+                        let cur_frame: NSRect = unsafe { msg_send![obj, frame] };
+                        if let Ok(mut pos) = MINI_SAVED_POS.lock() {
+                            *pos = Some((cur_frame.origin.x, cur_frame.origin.y));
+                        }
+                        // Expand to 400x560 centered on screen (notch area)
                         let win_w = 400.0;
                         let win_h = 560.0;
                         let x = sx + (sw - win_w) / 2.0;
@@ -1307,11 +1315,13 @@ async fn set_mini_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), 
                             let _: () = msg_send![obj, setFrame: frame, display: true, animate: false];
                         }
                     } else {
-                        // Collapse to small 60x28 right of center (near notch)
+                        // Collapse: restore to saved pet position
                         let win_w = 60.0;
                         let win_h = 45.0;
-                        let x = sx + sw / 2.0 + 140.0;
-                        let y = sy + sh - win_h;
+                        let (x, y) = MINI_SAVED_POS.lock()
+                            .ok()
+                            .and_then(|pos| *pos)
+                            .unwrap_or((sx + sw / 2.0 + 140.0, sy + sh - win_h));
                         let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(win_w, win_h));
                         unsafe {
                             let _: () = msg_send![obj, setFrame: frame, display: true, animate: false];

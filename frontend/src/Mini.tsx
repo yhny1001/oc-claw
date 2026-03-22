@@ -383,6 +383,7 @@ export default function Mini() {
   const [settingsNav, setSettingsNav] = useState<'create' | 'pairing' | 'settings'>('create')
   const [showWorkDetail, setShowWorkDetail] = useState(false)
   const [hiding, setHiding] = useState(false)
+  const [pinned, setPinned] = useState(false)
 
   // Bob animation (only when collapsed, avoid 60fps re-renders in settings mode)
   useEffect(() => {
@@ -697,21 +698,21 @@ export default function Mini() {
     await s.save()
   }
 
-  // Click outside to collapse
+  // Click outside to collapse (only when not pinned)
   useEffect(() => {
-    if (!expanded) return
+    if (!expanded || pinned) return
     const onClick = (e: MouseEvent) => {
       if (!(e.target as HTMLElement).closest('#mini-panel')) collapse()
     }
     window.addEventListener('mousedown', onClick)
     return () => window.removeEventListener('mousedown', onClick)
-  }, [expanded, collapse])
+  }, [expanded, pinned, collapse])
 
-  // Window blur: collapse when user clicks outside the app (settings mode)
+  // Window blur: collapse when user clicks outside the app (when not pinned, or in settings mode)
   // Skip blur when a file picker dialog is open
   useEffect(() => {
-    if (!settingsMode) return
-    // Intercept file input clicks to set the flag
+    if (!expanded) return
+    if (pinned && !settingsMode) return
     const onClickCapture = (e: MouseEvent) => {
       const el = e.target as HTMLElement
       if (el instanceof HTMLInputElement && el.type === 'file') {
@@ -731,13 +732,41 @@ export default function Mini() {
       window.removeEventListener('blur', onBlur)
       window.removeEventListener('focus', onFocus)
     }
-  }, [settingsMode, collapse])
+  }, [expanded, pinned, settingsMode, collapse])
 
-  const handleMouseDown = async (e: React.MouseEvent) => {
-    if (e.detail === 1 && !(e.target as HTMLElement).closest('[data-no-drag]')) {
-      await getCurrentWindow().startDragging()
+  const isDragging = useRef(false)
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.detail !== 1 || (e.target as HTMLElement).closest('[data-no-drag]')) return
+    isDragging.current = false
+    const startX = e.screenX
+    const startY = e.screenY
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isDragging.current && (Math.abs(ev.screenX - startX) > 3 || Math.abs(ev.screenY - startY) > 3)) {
+        isDragging.current = true
+        getCurrentWindow().startDragging()
+      }
     }
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+      if (!isDragging.current) expand()
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
   }
+
+  // When window gains focus while collapsed (first click from another app), expand immediately
+  useEffect(() => {
+    if (expanded) return
+    const onFocus = () => {
+      // Small delay to let mousedown/drag detection run first
+      setTimeout(() => {
+        if (!isDragging.current) expand()
+      }, 50)
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [expanded, expand])
 
   const claudeWorking = claudeSessions.some(cs => cs.status === 'processing' || cs.status === 'tool_running')
   const hasWorking = anySessionActive || Object.values(healthMap).some(Boolean) || claudeWorking
@@ -758,7 +787,6 @@ export default function Mini() {
       {!expanded && !hiding && (
         <div
           id="mini-panel"
-          onClick={() => expand()}
           onMouseDown={handleMouseDown}
           style={{
             width: '100%', height: '100%',
@@ -868,9 +896,22 @@ export default function Mini() {
                     <span style={{ fontSize: 13 }}>&lsaquo;</span> Back
                   </button>
                 ) : (
-                  <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: 10 }}>
-                    {allSessions.length + claudeSessions.length} session{(allSessions.length + claudeSessions.length) !== 1 ? 's' : ''}
-                  </div>
+                  <button data-no-drag
+                    onClick={(e) => { e.stopPropagation(); setPinned(!pinned) }}
+                    style={{
+                      background: 'none', border: 'none',
+                      color: pinned ? '#fff' : 'rgba(255,255,255,0.25)',
+                      fontSize: 12, cursor: 'pointer', padding: '2px 6px',
+                      transform: pinned ? 'rotate(0deg)' : 'rotate(45deg)',
+                      transition: 'transform 0.2s, color 0.2s',
+                    }}
+                    title={pinned ? '取消置顶' : '置顶'}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 17v5"/>
+                      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16h14v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>
+                    </svg>
+                  </button>
                 )}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>

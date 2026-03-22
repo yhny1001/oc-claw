@@ -3,8 +3,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { load } from '@tauri-apps/plugin-store'
 import { listen } from '@tauri-apps/api/event'
-import { GifMakerTab } from './components/GifMakerTab'
+import { ChevronDown, Check, Pen, Plus, X } from 'lucide-react'
+import { AnimatePresence, motion } from 'motion/react'
 import { SettingsTab } from './components/SettingsTab'
+import { AgentDetailView } from './components/AgentDetailView'
+import { CreateCharacterModal } from './components/CreateCharacterModal'
 import { getStore, DEFAULT_CHAR, loadCharacters } from './lib/store'
 import { formatTokens, formatTime, formatDuration, saveAgentCharMap } from './lib/agents'
 import type { AgentMetrics } from './lib/types'
@@ -162,187 +165,156 @@ function MiniDailyChart({ extraInfo }: { extraInfo: { daily_counts: { date: stri
   )
 }
 
-function MiniCharPairing({ characters, currentChar, onSelect }: {
-  characters: CharacterMeta[]
-  currentChar: string
-  onSelect: (charName: string) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
-  }, [])
-
-  const charsWithMini = characters.filter((c) => c.miniActions && Object.keys(c.miniActions).length > 0)
-  const charMeta = characters.find((c) => c.name === currentChar)
-  const gif = charMeta ? getMiniGif(charMeta, false, true) : undefined
-
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-      <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden shrink-0">
-          {gif ? (
-            <img src={gif} alt="" className="w-9 h-9 object-contain" style={{ imageRendering: 'pixelated' }} draggable={false} />
-          ) : (
-            <span className="text-gray-400 text-lg">?</span>
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-gray-900">看板娘</div>
-          <div className="text-xs text-gray-400">Notch 上显示的角色</div>
-        </div>
-        <div ref={ref} className="relative shrink-0" style={{ minWidth: 140 }}>
-          <button
-            onClick={() => setOpen(!open)}
-            className="w-full flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-left cursor-pointer hover:bg-gray-100 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-900"
-          >
-            <span className={currentChar ? 'text-gray-900 font-medium truncate' : 'text-gray-400 truncate'}>
-              {currentChar || '自动选择'}
-            </span>
-            <svg className={`w-4 h-4 text-gray-400 shrink-0 ml-2 transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-          </button>
-
-          {open && (
-            <div className="absolute top-full right-0 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-lg z-30 py-1.5 max-h-48 overflow-y-auto" style={{ minWidth: 180 }}>
-              <button
-                onClick={() => { onSelect(''); setOpen(false) }}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
-                  !currentChar ? 'bg-gray-50 text-gray-900' : 'text-gray-500 hover:bg-gray-50'
-                }`}
-              >
-                <div className="w-7 h-7 rounded-md bg-gray-100 flex items-center justify-center shrink-0">
-                  <span className="text-gray-300 text-xs">--</span>
-                </div>
-                <span className={!currentChar ? 'font-medium' : ''}>自动选择</span>
-              </button>
-              {charsWithMini.map((c) => {
-                const isSelected = c.name === currentChar
-                const preview = getMiniGif(c, false, true)
-                return (
-                  <button
-                    key={c.name}
-                    onClick={() => { onSelect(c.name); setOpen(false) }}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
-                      isSelected ? 'bg-gray-50 text-gray-900' : 'text-gray-700 hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="w-7 h-7 rounded-md bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden shrink-0">
-                      {preview ? (
-                        <img src={preview} alt="" className="w-6 h-6 object-contain" style={{ imageRendering: 'pixelated' }} draggable={false} />
-                      ) : (
-                        <span className="text-gray-300 text-xs">?</span>
-                      )}
-                    </div>
-                    <span className={isSelected ? 'font-medium' : ''}>{c.name}</span>
-                    {isSelected && (
-                      <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0 ml-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function PairingRow({ agent, characters, currentChar, onSelect }: {
+function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, onToggle, onOpenCreate }: {
   agent: AgentInfo
   characters: CharacterMeta[]
   currentChar: string
   onSelect: (charName: string) => void
+  isOpen: boolean
+  onToggle: () => void
+  onOpenCreate?: () => void
 }) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
-  }, [])
-
+  const [isEditing, setIsEditing] = useState(false)
   const charsWithMini = characters.filter((c) => c.miniActions && Object.keys(c.miniActions).length > 0)
   const charMeta = characters.find((c) => c.name === currentChar)
   const gif = charMeta ? getMiniGif(charMeta, false) : undefined
 
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-      <div className="flex items-center gap-3">
-        <div className="w-11 h-11 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden shrink-0">
-          {gif ? (
-            <img src={gif} alt="" className="w-9 h-9 object-contain" style={{ imageRendering: 'pixelated' }} draggable={false} />
-          ) : (
-            <span className="text-gray-400 text-lg">{agent.identityEmoji || '?'}</span>
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-gray-900 truncate">
-            {agent.identityEmoji || ''} {agent.identityName || agent.id}
-          </div>
-          <div className="text-xs text-gray-400 truncate font-mono">{agent.id}</div>
-        </div>
-        <div ref={ref} className="relative shrink-0" style={{ minWidth: 140 }}>
-          <button
-            onClick={() => setOpen(!open)}
-            className="w-full flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-left cursor-pointer hover:bg-gray-100 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-900"
-          >
-            <span className={currentChar ? 'text-gray-900 font-medium truncate' : 'text-gray-400 truncate'}>
-              {currentChar || '未分配'}
-            </span>
-            <svg className={`w-4 h-4 text-gray-400 shrink-0 ml-2 transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-          </button>
+  useEffect(() => {
+    if (!isOpen) setIsEditing(false)
+  }, [isOpen])
 
-          {open && (
-            <div className="absolute top-full right-0 mt-1.5 bg-white border border-gray-200 rounded-xl shadow-lg z-30 py-1.5 max-h-48 overflow-y-auto" style={{ minWidth: 180 }}>
-              <button
-                onClick={() => { onSelect(''); setOpen(false) }}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
-                  !currentChar ? 'bg-gray-50 text-gray-900' : 'text-gray-500 hover:bg-gray-50'
-                }`}
-              >
-                <div className="w-7 h-7 rounded-md bg-gray-100 flex items-center justify-center shrink-0">
-                  <span className="text-gray-300 text-xs">--</span>
-                </div>
-                <span className={!currentChar ? 'font-medium' : ''}>未分配</span>
-              </button>
-              {charsWithMini.map((c) => {
-                const isSelected = c.name === currentChar
-                const preview = getMiniGif(c, false)
-                return (
-                  <button
-                    key={c.name}
-                    onClick={() => { onSelect(c.name); setOpen(false) }}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
-                      isSelected ? 'bg-gray-50 text-gray-900' : 'text-gray-700 hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="w-7 h-7 rounded-md bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden shrink-0">
-                      {preview ? (
-                        <img src={preview} alt="" className="w-6 h-6 object-contain" style={{ imageRendering: 'pixelated' }} draggable={false} />
-                      ) : (
-                        <span className="text-gray-300 text-xs">?</span>
-                      )}
-                    </div>
-                    <span className={isSelected ? 'font-medium' : ''}>{c.name}</span>
-                    {isSelected && (
-                      <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0 ml-auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                    )}
-                  </button>
-                )
-              })}
+  return (
+    <div className="flex flex-col border-b border-white/5 last:border-b-0 group">
+      {/* Main Row */}
+      <div
+        className="relative flex items-center justify-between p-4 hover:bg-white/[0.02] transition-colors cursor-pointer"
+        onClick={onToggle}
+      >
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <div className="w-12 h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden">
+              {gif ? (
+                <img src={gif} alt="" className="w-full h-full object-contain" style={{ imageRendering: 'pixelated' }} draggable={false} />
+              ) : (
+                <span className="text-white/40 text-xl">{agent.identityEmoji || '?'}</span>
+              )}
             </div>
-          )}
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-base font-medium text-white/90">{agent.identityName || agent.id}</span>
+              {agent.identityEmoji && <span className="text-sm">{agent.identityEmoji}</span>}
+            </div>
+            <div className="text-sm text-white/40 mt-0.5 font-mono">{agent.id}</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-sm text-white/50 group-hover:text-white/80 transition-colors pr-2">
+          <span>{currentChar || '未分配'}</span>
+          <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`} />
         </div>
       </div>
+
+      {/* Expanded Selection Area */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+            className="overflow-hidden bg-[#0a0a0a]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-t border-white/5">
+              {/* Action Buttons row */}
+              <div className="flex items-center justify-end gap-2 mb-3">
+                {onOpenCreate && (
+                  <button
+                    onClick={() => onOpenCreate()}
+                    className="flex items-center justify-center w-7 h-7 rounded-md transition-colors bg-white/5 text-white/60 hover:text-white hover:bg-white/10 border border-transparent"
+                    title="创建角色"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                )}
+                <button
+                  onClick={() => setIsEditing(!isEditing)}
+                  className={`flex items-center justify-center w-7 h-7 rounded-md transition-colors ${
+                    isEditing
+                      ? 'bg-red-500/20 text-red-400 border border-red-500/20'
+                      : 'bg-white/5 text-white/60 hover:text-white hover:bg-white/10 border border-transparent'
+                  }`}
+                  title={isEditing ? '完成' : '编辑'}
+                >
+                  {isEditing ? <Check className="w-4 h-4" /> : <Pen className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+
+              {/* Character Grid */}
+              <div className="max-h-[260px] overflow-y-auto pr-2 pt-2 scrollbar-thin">
+                <div className="grid grid-cols-3 gap-3">
+                  {charsWithMini.map((c) => {
+                    const isSelected = c.name === currentChar
+                    const preview = getMiniGif(c, false)
+                    const isDefault = c.name === 'default' || c.name === 'keli'
+
+                    return (
+                      <div
+                        key={c.name}
+                        onClick={() => {
+                          if (isEditing && !isDefault) {
+                            // TODO: delete character
+                          } else if (!isEditing) {
+                            onSelect(c.name)
+                          }
+                        }}
+                        className={`relative flex items-center gap-3 p-2.5 rounded-xl border transition-all ${
+                          isEditing && !isDefault
+                            ? 'cursor-pointer hover:bg-red-500/10 border-red-500/30'
+                            : isEditing && isDefault
+                            ? 'opacity-40 cursor-not-allowed border-transparent'
+                            : isSelected
+                            ? 'bg-white/10 border-white/20 cursor-default'
+                            : 'bg-white/5 border-transparent hover:bg-white/10 cursor-pointer'
+                        }`}
+                      >
+                        <div className="relative w-9 h-9 shrink-0 rounded-lg overflow-hidden bg-black/50 border border-white/10">
+                          {preview ? (
+                            <img
+                              src={preview}
+                              alt={c.name}
+                              className={`w-full h-full object-contain transition-opacity ${isEditing && !isDefault ? 'opacity-50' : 'opacity-90'}`}
+                              style={{ imageRendering: 'pixelated' }}
+                              draggable={false}
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-white/30 text-xs">?</div>
+                          )}
+                        </div>
+                        <span className="text-sm text-white/80 truncate flex-1">{c.name}</span>
+
+                        {/* Delete Badge */}
+                        {isEditing && !isDefault && (
+                          <div className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center shadow-md z-10 hover:bg-red-600 transition-colors">
+                            <X className="w-3 h-3 text-white" />
+                          </div>
+                        )}
+
+                        {/* Selected Indicator */}
+                        {!isEditing && isSelected && (
+                          <div className="absolute top-1/2 -translate-y-1/2 right-3">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]" />
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -393,7 +365,11 @@ export default function Mini() {
   const [settingsMode, setSettingsMode] = useState(false)
   const settingsModeRef = useRef(false)
   const filePickerOpenRef = useRef(false)
-  const [settingsNav, setSettingsNav] = useState<'create' | 'pairing' | 'settings'>('create')
+  const [settingsNav, setSettingsNav] = useState<'pairing' | 'settings'>('pairing')
+  const [openAccordionId, setOpenAccordionId] = useState<string | null>(null)
+  const [isCreateModalOpen, _setIsCreateModalOpen] = useState(false)
+  const isCreateModalOpenRef = useRef(false)
+  const setIsCreateModalOpen = (v: boolean) => { isCreateModalOpenRef.current = v; _setIsCreateModalOpen(v) }
   const [showWorkDetail, setShowWorkDetail] = useState(false)
   const [hiding, setHiding] = useState(false)
   const [pinned, setPinned] = useState(false)
@@ -697,7 +673,7 @@ export default function Mini() {
     setTimeout(async () => {
       settingsModeRef.current = false
       setSettingsMode(false)
-      setSettingsNav('create')
+      setSettingsNav('pairing')
       try { await invoke('set_mini_expanded', { expanded: true }) } catch {}
       requestAnimationFrame(() => {
         requestAnimationFrame(() => setShowPanel(true))
@@ -716,6 +692,7 @@ export default function Mini() {
   useEffect(() => {
     if (!expanded || pinned) return
     const onClick = (e: MouseEvent) => {
+      if (isCreateModalOpenRef.current) return
       if (!(e.target as HTMLElement).closest('#mini-panel')) collapse()
     }
     window.addEventListener('mousedown', onClick)
@@ -736,6 +713,7 @@ export default function Mini() {
     const onFocus = () => { filePickerOpenRef.current = false }
     const onBlur = () => {
       if (filePickerOpenRef.current) return
+      if (isCreateModalOpenRef.current) return
       collapse()
     }
     window.addEventListener('click', onClickCapture, true)
@@ -861,7 +839,7 @@ export default function Mini() {
                       }}>
                       <span style={{ fontSize: 13 }}>&lsaquo;</span> 返回
                     </button>
-                    {(['create', 'pairing', 'settings'] as const).map((nav) => (
+                    {(['pairing', 'settings'] as const).map((nav) => (
                       <button key={nav} data-no-drag
                         onClick={(e) => { e.stopPropagation(); setSettingsNav(nav) }}
                         style={{
@@ -871,7 +849,7 @@ export default function Mini() {
                           fontSize: 11, cursor: 'pointer', padding: '3px 10px',
                           borderRadius: 6, fontWeight: settingsNav === nav ? 600 : 400,
                         }}>
-                        {nav === 'create' ? '角色创建' : nav === 'pairing' ? '配对' : '设置'}
+                        {nav === 'pairing' ? '配对' : '设置'}
                       </button>
                     ))}
                   </div>
@@ -956,81 +934,97 @@ export default function Mini() {
             {/* ===== Settings content ===== */}
             {settingsMode ? (
               <div data-no-drag className="scrollbar-thin" style={{ flex: 1, overflow: 'hidden', margin: 8, marginTop: 0, borderRadius: 12, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                <div className="bg-[#fafafa] text-gray-800 font-sans antialiased scrollbar-thin" style={{ borderRadius: '12px 12px 0 0', overflow: 'auto', flex: 1, minHeight: 0 }}>
-                  {settingsNav === 'create' && <GifMakerTab />}
+                <div className="bg-[#151515] text-white font-sans antialiased scrollbar-thin" style={{ borderRadius: '12px 12px 0 0', overflow: 'auto', flex: 1, minHeight: 0 }}>
                   {settingsNav === 'pairing' && (
-                    <div className="h-full overflow-y-auto bg-slate-50 p-6 scrollbar-thin">
-                      <div className="max-w-2xl mx-auto space-y-4">
-                        <p className="text-sm text-gray-500">将 Agent 与角色配对，配对后 Mini 中会显示对应角色的 GIF 动画。</p>
+                    <div className="h-full overflow-y-auto bg-[#151515] pt-6 px-6 pb-10 scrollbar-thin">
+                      <div className="max-w-3xl mx-auto">
+                        <p className="text-sm text-white/50 mb-10">
+                          将 Agent 与角色配对，配对后 Mini 中会显示对应角色的 GIF 动画。
+                        </p>
 
-                        {/* OpenClaw agents */}
+                        {/* OpenClaw Agents */}
                         {enableOpenClaw && (
-                          <>
-                            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider">OpenClaw Agents</div>
-                            {agents.length === 0 ? (
-                              <div className="text-center text-gray-400 py-4 text-sm">等待 agent 上线...</div>
-                            ) : (
-                              <div className="space-y-3">
-                                {agents.map((agent) => (
-                                  <PairingRow
+                          <div className="mb-8">
+                            <h2 className="text-xs font-bold text-white/30 uppercase tracking-widest mb-3 px-4">OpenClaw Agents</h2>
+                            <div className="bg-[#0f0f0f] rounded-2xl border border-white/5 shadow-2xl overflow-hidden">
+                              {agents.length === 0 ? (
+                                <div className="text-center text-white/40 py-8 text-sm">等待 agent 上线...</div>
+                              ) : (
+                                agents.map((agent) => (
+                                  <AgentAccordionItem
                                     key={agent.id}
                                     agent={agent}
                                     characters={characters}
                                     currentChar={agentCharMap[agent.id] || 'default'}
+                                    isOpen={openAccordionId === agent.id}
+                                    onToggle={() => setOpenAccordionId(openAccordionId === agent.id ? null : agent.id)}
+                                    onOpenCreate={() => setIsCreateModalOpen(true)}
                                     onSelect={async (charName) => {
                                       const updated = { ...agentCharMap, [agent.id]: charName }
                                       setAgentCharMap(updated)
                                       await saveAgentCharMap(updated)
                                     }}
                                   />
-                                ))}
-                              </div>
-                            )}
-                          </>
+                                ))
+                              )}
+                            </div>
+                          </div>
                         )}
 
-                        {/* Claude Code agent */}
+                        {/* Claude Code */}
                         {enableClaudeCode && (
-                          <>
-                            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider pt-2">Claude Code</div>
-                            <PairingRow
-                              agent={{ id: 'claude-code', identityName: 'Claude Code', identityEmoji: '🤖' }}
+                          <div className="mb-8">
+                            <h2 className="text-xs font-bold text-white/30 uppercase tracking-widest mb-3 px-4">Claude Code</h2>
+                            <div className="bg-[#0f0f0f] rounded-2xl border border-white/5 shadow-2xl overflow-hidden">
+                              <AgentAccordionItem
+                                agent={{ id: 'claude-code', identityName: 'Claude Code', identityEmoji: '🤖' }}
+                                characters={characters}
+                                currentChar={claudeCharName}
+                                isOpen={openAccordionId === 'claude-code'}
+                                onToggle={() => setOpenAccordionId(openAccordionId === 'claude-code' ? null : 'claude-code')}
+                                onOpenCreate={() => setIsCreateModalOpen(true)}
+                                onSelect={async (charName) => {
+                                  setClaudeCharName(charName)
+                                  const store = await load('settings.json', { defaults: {}, autoSave: true })
+                                  await store.set('claude_char', charName)
+                                  await store.save()
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* System (看板娘) */}
+                        <div className="mb-8">
+                          <h2 className="text-xs font-bold text-white/30 uppercase tracking-widest mb-3 px-4">System</h2>
+                          <div className="bg-[#0f0f0f] rounded-2xl border border-white/5 shadow-2xl overflow-hidden">
+                            <AgentAccordionItem
+                              agent={{ id: '__mini__', identityName: '看板娘', identityEmoji: '💤' }}
                               characters={characters}
-                              currentChar={claudeCharName}
-                              onSelect={async (charName) => {
-                                setClaudeCharName(charName)
+                              currentChar={miniChar?.name || ''}
+                              isOpen={openAccordionId === '__mini__'}
+                              onToggle={() => setOpenAccordionId(openAccordionId === '__mini__' ? null : '__mini__')}
+                              onOpenCreate={() => setIsCreateModalOpen(true)}
+                              onSelect={async (name) => {
                                 const store = await load('settings.json', { defaults: {}, autoSave: true })
-                                await store.set('claude_char', charName)
+                                await store.set('mini_character', name)
                                 await store.save()
+                                loadMiniChar()
                               }}
                             />
-                          </>
-                        )}
-
-                        {/* 看板娘 (notch 上显示的角色) */}
-                        <div className="pt-4 border-t border-gray-200">
-                          <MiniCharPairing
-                            characters={characters}
-                            currentChar={miniChar?.name || ''}
-                            onSelect={async (name) => {
-                              const store = await load('settings.json', { defaults: {}, autoSave: true })
-                              await store.set('mini_character', name)
-                              await store.save()
-                              loadMiniChar()
-                            }}
-                          />
+                          </div>
                         </div>
 
                         {agents.length > 0 && characters.filter((c) => c.miniActions && Object.keys(c.miniActions).length > 0).length < agents.length && (
-                          <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg p-3">
-                            角色数量不足，请先在「角色创建」中创建更多带 Mini 动画的角色。
+                          <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
+                            角色数量不足，请先创建更多带 Mini 动画的角色。
                           </div>
                         )}
                       </div>
                     </div>
                   )}
                   {settingsNav === 'settings' && (
-                    <div className="h-full overflow-y-auto bg-slate-50">
+                    <div className="h-full overflow-y-auto bg-[#151515] scrollbar-thin">
                       <SettingsTab showWorkDetail={showWorkDetail} onToggleWorkDetail={toggleWorkDetail} />
                     </div>
                   )}
@@ -1341,152 +1335,28 @@ export default function Mini() {
                 )}
               </div>
             ) : (
-              /* ===== Agent detail panel (dark) ===== */
-              <div className="scrollbar-thin" style={{ maxHeight: 524, overflowY: 'auto', padding: '12px 14px' }}>
-                {!metrics ? (
-                  <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, textAlign: 'center', padding: '30px 0' }}>
-                    loading...
-                  </div>
-                ) : (
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                      <div style={{ color: '#fff', fontSize: 14, fontWeight: 700 }}>
-                        {selectedAgent?.identityEmoji || ''} {selectedAgent?.identityName || selectedAgentId}
-                      </div>
-                      <div style={{
-                        background: metrics.active ? 'rgba(46,204,113,0.25)' : 'rgba(255,255,255,0.08)',
-                        color: metrics.active ? '#2ecc71' : '#999',
-                        fontSize: 10, padding: '2px 8px', borderRadius: 4, fontWeight: 600,
-                      }}>
-                        {metrics.active ? '工作中' : '空闲'}
-                      </div>
-                    </div>
-
-                    {metrics.channel && (
-                      <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, marginBottom: 8 }}>via {metrics.channel}</div>
-                    )}
-
-                    {metrics.currentTask && (
-                      <div style={{ marginBottom: 10 }}>
-                        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>当前任务</div>
-                        <div style={{ color: '#ddd', fontSize: 11, lineHeight: 1.5, wordBreak: 'break-word', background: 'rgba(255,255,255,0.04)', padding: '6px 8px', borderRadius: 6 }}>
-                          {metrics.currentTask}
-                        </div>
-                      </div>
-                    )}
-
-                    {metrics.currentTool && (
-                      <div style={{ marginBottom: 10 }}>
-                        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>最近工具</div>
-                        <div style={{ color: '#3498db', fontSize: 11, fontFamily: 'monospace', background: 'rgba(52,152,219,0.1)', padding: '6px 8px', borderRadius: 6 }}>
-                          {metrics.currentTool}
-                        </div>
-                      </div>
-                    )}
-
-                    <div style={{ marginBottom: 10 }}>
-                      <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>模型 & Token</div>
-                      <div style={{ background: 'rgba(255,255,255,0.04)', padding: '8px', borderRadius: 6 }}>
-                        <div style={{ color: '#ddd', fontSize: 11, marginBottom: 6 }}>
-                          {metrics.currentModel || '未知'}
-                          {metrics.thinkingLevel && <span style={{ color: 'rgba(255,255,255,0.35)', marginLeft: 6 }}>({metrics.thinkingLevel})</span>}
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 10px', fontSize: 10 }}>
-                          {([['输入', metrics.inputTokens], ['输出', metrics.outputTokens], ['缓存读', metrics.cacheReadTokens], ['缓存写', metrics.cacheWriteTokens]] as [string, number][]).map(([label, val]) => (
-                            <div key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                              <span style={{ color: 'rgba(255,255,255,0.45)' }}>{label}</span>
-                              <span style={{ color: '#ddd' }}>{formatTokens(val)}</span>
-                            </div>
-                          ))}
-                        </div>
-                        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                          <span style={{ color: '#f1c40f', fontSize: 12, fontWeight: 600 }}>{formatTokens(metrics.totalTokens)} tokens</span>
-                          {metrics.totalCost > 0 && <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10, marginLeft: 6 }}>${metrics.totalCost.toFixed(4)}</span>}
-                          {metrics.sessionStart && <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 9, marginLeft: 6 }}>{formatDuration(metrics.sessionStart)}</span>}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ marginBottom: 10 }}>
-                      <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>Session</div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4 }}>
-                        {([
-                          { label: '活跃', value: String(metrics.activeSessionCount) },
-                          { label: '消息', value: String(metrics.messageCount) },
-                          { label: '错误', value: String(metrics.errorCount), color: metrics.errorCount > 0 ? '#e74c3c' : undefined },
-                        ] as { label: string; value: string; color?: string }[]).map((item) => (
-                          <div key={item.label} style={{ background: 'rgba(255,255,255,0.04)', padding: '5px 8px', borderRadius: 6 }}>
-                            <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9 }}>{item.label}</div>
-                            <div style={{ color: item.color || '#ddd', fontSize: 13, fontWeight: 600 }}>{item.value}</div>
-                          </div>
-                        ))}
-                        {metrics.sessionStart && (
-                          <div style={{ background: 'rgba(255,255,255,0.04)', padding: '5px 8px', borderRadius: 6 }}>
-                            <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9 }}>开始</div>
-                            <div style={{ color: '#ddd', fontSize: 11, fontWeight: 600 }}>{formatTime(metrics.sessionStart)}</div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {metrics.toolCalls && metrics.toolCalls.length > 0 && (
-                      <div style={{ marginBottom: 10 }}>
-                        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>工具分布</div>
-                        {metrics.toolCalls.slice(0, 6).map((tc) => (
-                          <div key={tc.name} style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-                            <div style={{ flex: 1, background: 'rgba(52,152,219,0.15)', borderRadius: 3, overflow: 'hidden', height: 14, position: 'relative' }}>
-                              <div style={{ height: '100%', width: `${Math.max(8, (tc.count / metrics.toolCalls[0].count) * 100)}%`, background: 'rgba(52,152,219,0.4)', borderRadius: 3 }} />
-                              <span style={{ position: 'absolute', left: 4, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.8)', fontSize: 8, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{tc.name}</span>
-                            </div>
-                            <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 9, minWidth: 16, textAlign: 'right' }}>{tc.count}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {metrics.recentActions && metrics.recentActions.length > 0 && (
-                      <div style={{ marginBottom: 10 }}>
-                        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>最近动态</div>
-                        {metrics.recentActions.slice(0, 5).map((action, i) => (
-                          <div key={i} style={{
-                            display: 'flex', alignItems: 'flex-start', gap: 6, padding: '4px 0',
-                            borderBottom: i < (metrics.recentActions?.length ?? 0) - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none',
-                          }}>
-                            <span style={{
-                              fontSize: 8, padding: '1px 4px', borderRadius: 3, flexShrink: 0, marginTop: 1,
-                              background: action.type === 'tool' ? 'rgba(52,152,219,0.2)' : 'rgba(46,204,113,0.2)',
-                              color: action.type === 'tool' ? '#5dade2' : '#58d68d',
-                            }}>{action.type === 'tool' ? '工具' : '输出'}</span>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{action.summary}</div>
-                            </div>
-                            {action.timestamp && <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: 8, flexShrink: 0 }}>{formatTime(action.timestamp)}</span>}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {extraInfo?.skills?.length > 0 && (
-                      <div style={{ marginBottom: 10 }}>
-                        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>Skills</div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                          {extraInfo.skills.map((s: string) => (
-                            <span key={s} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 4, background: 'rgba(155,89,182,0.15)', color: '#bb8fce' }}>{s}</span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {extraInfo?.daily_counts?.length > 0 && (
-                      <MiniDailyChart extraInfo={extraInfo} />
-                    )}
-                  </div>
-                )}
-              </div>
+              /* ===== Agent detail panel (ui-2 style) ===== */
+              <AgentDetailView
+                agent={selectedAgent}
+                metrics={metrics}
+                extraInfo={extraInfo}
+                onBack={() => setSelectedAgentId(null)}
+                onSettings={() => { setSettingsMode(true); setSelectedAgentId(null) }}
+              />
             )}
           </div>
         </div>
       )}
+
+      <CreateCharacterModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSaved={async () => {
+          await invoke('scan_characters')
+          const chars = await loadCharacters()
+          setCharacters(chars)
+        }}
+      />
     </div>
   )
 }

@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { load } from '@tauri-apps/plugin-store'
 import { listen } from '@tauri-apps/api/event'
 import { ChevronDown, Check, Pen, Plus, X } from 'lucide-react'
@@ -10,7 +9,7 @@ import { SettingsTab } from './components/SettingsTab'
 import { AgentDetailView } from './components/AgentDetailView'
 import { CreateCharacterModal } from './components/CreateCharacterModal'
 import { getStore, DEFAULT_CHAR, loadCharacters } from './lib/store'
-import { formatTokens, formatTime, formatDuration, saveAgentCharMap } from './lib/agents'
+import { saveAgentCharMap } from './lib/agents'
 import type { AgentMetrics } from './lib/types'
 
 interface CharacterMeta {
@@ -205,85 +204,6 @@ function getMiniGif(char: CharacterMeta | undefined, petState: PetState | boolea
   const actionGifs = allGifs.filter((g) => !g.includes('idle'))
   if (state === 'working' && actionGifs.length > 0) return actionGifs[0]
   return idleGifs[0] || allGifs[0]
-}
-
-type ChartMode = 'calls' | 'tokens'
-
-function MiniDailyChart({ extraInfo }: { extraInfo: { daily_counts: { date: string; count: number; tokens: number }[] } }) {
-  const [mode, setMode] = useState<ChartMode>('calls')
-  const counts = extraInfo.daily_counts
-  const todayEntry = counts[counts.length - 1]
-  const isCalls = mode === 'calls'
-  const values = counts.map((d) => (isCalls ? d.count : d.tokens))
-  const maxVal = Math.max(...values, 1)
-  const chartH = 80
-
-  const scale = !isCalls && maxVal >= 1_000_000 ? 1_000_000 : !isCalls && maxVal >= 1_000 ? 1_000 : 1
-  const unitLabel = isCalls ? '次数' : scale === 1_000_000 ? 'M tokens' : scale === 1_000 ? 'K tokens' : 'tokens'
-  const fmtTick = (v: number) => {
-    if (isCalls) return String(v)
-    const n = v / scale
-    return n % 1 === 0 ? String(n) : n.toFixed(1)
-  }
-  const ticks = [maxVal, Math.round(maxVal / 2), 0]
-
-  return (
-    <div style={{ marginBottom: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-          {isCalls ? '每日调用' : '每日 Token'} (近14天)
-        </div>
-        <div style={{ display: 'flex', background: 'rgba(255,255,255,0.08)', borderRadius: 4, padding: 1 }}>
-          {(['calls', 'tokens'] as const).map((m) => (
-            <button key={m} onClick={() => setMode(m)} style={{
-              background: mode === m ? 'rgba(255,255,255,0.15)' : 'none',
-              border: 'none', color: mode === m ? '#fff' : 'rgba(255,255,255,0.4)',
-              fontSize: 8, padding: '2px 6px', borderRadius: 3, cursor: 'pointer', fontWeight: mode === m ? 600 : 400,
-            }}>
-              {m === 'calls' ? '调用' : 'Token'}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
-        <span style={{ fontSize: 10, color: '#5dade2', fontWeight: 600 }}>
-          今天 {isCalls ? `${todayEntry?.count ?? 0} 次` : formatTokens(todayEntry?.tokens ?? 0)}
-        </span>
-      </div>
-
-      <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: '8px 8px 4px' }}>
-        <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 8, marginBottom: 2 }}>{unitLabel}</div>
-        <div style={{ display: 'flex' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', width: 28, paddingRight: 4, height: chartH }}>
-            {ticks.map((t, i) => (
-              <span key={i} style={{ fontSize: 8, color: 'rgba(255,255,255,0.3)', textAlign: 'right', lineHeight: 1 }}>{fmtTick(t)}</span>
-            ))}
-          </div>
-          <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', gap: 1, height: chartH, borderLeft: '1px solid rgba(255,255,255,0.1)', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingLeft: 1 }}>
-            {counts.map((d, idx) => {
-              const v = values[idx]
-              const h = Math.max(2, Math.round((v / maxVal) * (chartH - 6)))
-              const isToday = d.date === new Date().toISOString().slice(0, 10)
-              const tip = isCalls ? `${d.date}: ${d.count} 次` : `${d.date}: ${formatTokens(d.tokens)}`
-              return (
-                <div key={d.date} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }} title={tip}>
-                  <div style={{ width: '100%', borderRadius: '2px 2px 0 0', height: h, background: isToday ? '#3b82f6' : v > 0 ? 'rgba(93,173,226,0.5)' : 'rgba(255,255,255,0.06)', transition: 'height 0.3s' }} />
-                </div>
-              )
-            })}
-          </div>
-        </div>
-        <div style={{ display: 'flex', marginTop: 3, paddingLeft: 32 }}>
-          <div style={{ flex: 1, display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 8 }}>{counts[0]?.date.slice(5)}</span>
-            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 8 }}>{counts[Math.floor(counts.length / 2)]?.date.slice(5)}</span>
-            <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 8 }}>{counts[counts.length - 1]?.date.slice(5)}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, onToggle, onOpenCreate }: {
@@ -495,7 +415,6 @@ export default function Mini() {
   const [isCreateModalOpen, _setIsCreateModalOpen] = useState(false)
   const isCreateModalOpenRef = useRef(false)
   const setIsCreateModalOpen = (v: boolean) => { isCreateModalOpenRef.current = v; _setIsCreateModalOpen(v) }
-  const [showWorkDetail, setShowWorkDetail] = useState(false)
   const [hiding, setHiding] = useState(false)
   const [pinned, setPinned] = useState(false)
 
@@ -750,11 +669,6 @@ export default function Mini() {
     return () => { cancelled = true; clearInterval(i1); clearInterval(i2) }
   }, [selectedAgentId])
 
-  useEffect(() => {
-    getStore().then((s) => s.get('show_work_detail')).then((v) => {
-      if (typeof v === 'boolean') setShowWorkDetail(v)
-    }).catch(() => {})
-  }, [])
 
   // Build character slots (OpenClaw + Claude Code)
   const ocSlots: SessionSlot[] = allSessions.slice(0, MAX_SLOTS).map((s, i) => {
@@ -841,13 +755,6 @@ export default function Mini() {
       })
     }, 300)
   }, [])
-
-  const toggleWorkDetail = async (val: boolean) => {
-    setShowWorkDetail(val)
-    const s = await getStore()
-    await s.set('show_work_detail', val)
-    await s.save()
-  }
 
   // Click outside to collapse (only when not pinned)
   useEffect(() => {
@@ -1201,7 +1108,7 @@ export default function Mini() {
                   )}
                   {settingsNav === 'settings' && (
                     <div className="h-full overflow-y-auto bg-[#151515] scrollbar-thin">
-                      <SettingsTab showWorkDetail={showWorkDetail} onToggleWorkDetail={toggleWorkDetail} disableSleepAnim={disableSleepAnim} onToggleSleepAnim={async (v) => { setDisableSleepAnim(v); const store = await getStore(); await store.set('disable_sleep_anim', v); await store.save() }} notifySound={notifySound} onChangeNotifySound={async (v) => { setNotifySound(v); const store = await getStore(); await store.set('notify_sound', v); await store.save() }} waitingSound={waitingSound} onToggleWaitingSound={async (v) => { setWaitingSound(v); const store = await getStore(); await store.set('waiting_sound', v); await store.save() }} mascotPosition={mascotPosition} onChangeMascotPosition={async (v) => { setMascotPosition(v); mascotPositionRef.current = v; const store = await getStore(); await store.set('mascot_position', v); await store.save() }} />
+                      <SettingsTab disableSleepAnim={disableSleepAnim} onToggleSleepAnim={async (v) => { setDisableSleepAnim(v); const store = await getStore(); await store.set('disable_sleep_anim', v); await store.save() }} notifySound={notifySound} onChangeNotifySound={async (v) => { setNotifySound(v); const store = await getStore(); await store.set('notify_sound', v); await store.save() }} waitingSound={waitingSound} onToggleWaitingSound={async (v) => { setWaitingSound(v); const store = await getStore(); await store.set('waiting_sound', v); await store.save() }} mascotPosition={mascotPosition} onChangeMascotPosition={async (v) => { setMascotPosition(v); mascotPositionRef.current = v; const store = await getStore(); await store.set('mascot_position', v); await store.save() }} />
                     </div>
                   )}
                 </div>

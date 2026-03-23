@@ -34,7 +34,7 @@ function CopyCode({ text }: { text: string }) {
   )
 }
 
-export function SettingsTab({ showWorkDetail, onToggleWorkDetail, disableSleepAnim, onToggleSleepAnim, notifySound, onChangeNotifySound, waitingSound, onToggleWaitingSound, mascotPosition, onChangeMascotPosition }: { showWorkDetail: boolean; onToggleWorkDetail: (v: boolean) => void; disableSleepAnim: boolean; onToggleSleepAnim: (v: boolean) => void; notifySound: 'default' | 'manbo'; onChangeNotifySound: (v: 'default' | 'manbo') => void; waitingSound: boolean; onToggleWaitingSound: (v: boolean) => void; mascotPosition: 'left' | 'right'; onChangeMascotPosition: (v: 'left' | 'right') => void }) {
+export function SettingsTab({ disableSleepAnim, onToggleSleepAnim, notifySound, onChangeNotifySound, waitingSound, onToggleWaitingSound, mascotPosition, onChangeMascotPosition }: { disableSleepAnim: boolean; onToggleSleepAnim: (v: boolean) => void; notifySound: 'default' | 'manbo'; onChangeNotifySound: (v: 'default' | 'manbo') => void; waitingSound: boolean; onToggleWaitingSound: (v: boolean) => void; mascotPosition: 'left' | 'right'; onChangeMascotPosition: (v: 'left' | 'right') => void }) {
   const [ocMode, setOcMode] = useState<'local' | 'remote'>('local')
   const [sshHost, setSshHost] = useState('')
   const [sshUser, setSshUser] = useState('')

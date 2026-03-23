@@ -7,7 +7,7 @@ import {
 } from '../utils/spriteUtils'
 import { exportGif } from '../utils/gifExport'
 import type { PipelineConfig } from '../lib/types'
-import { loadCharacters, getStore } from '../lib/store'
+import { loadCharacters } from '../lib/store'
 import { loadPipelines, PIPELINE_CHROMA } from '../lib/pipeline'
 
 function AnimPreview({ frames, offsets, fps, size = 80 }: {

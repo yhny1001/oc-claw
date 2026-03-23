@@ -17,6 +17,16 @@ function DailyChart({ extraInfo }: { extraInfo: { daily_counts: { date: string; 
   const isCalls = mode === 'calls'
   const values = counts.map((d: any) => (isCalls ? d.count : d.tokens))
   const maxVal = Math.max(...values, 1)
+  const chartH = 80
+
+  const scale = !isCalls && maxVal >= 1_000_000 ? 1_000_000 : !isCalls && maxVal >= 1_000 ? 1_000 : 1
+  const unitLabel = isCalls ? '次数' : scale === 1_000_000 ? 'M tokens' : scale === 1_000 ? 'K tokens' : 'tokens'
+  const fmtTick = (v: number) => {
+    if (isCalls) return String(v)
+    const n = v / scale
+    return n % 1 === 0 ? String(n) : n.toFixed(1)
+  }
+  const ticks = [maxVal, Math.round(maxVal / 2), 0]
 
   return (
     <div className="flex flex-col gap-4 bg-white/[0.03] border border-white/5 rounded-2xl p-4">
@@ -41,26 +51,41 @@ function DailyChart({ extraInfo }: { extraInfo: { daily_counts: { date: string; 
           今天 {isCalls ? `${todayEntry?.count ?? 0} 次` : formatTokens(todayEntry?.tokens ?? 0)}
         </span>
       </div>
-      <div className="h-24 flex items-end gap-1.5 pt-4">
-        {counts.map((d: any, i: number) => {
-          const v = values[i]
-          const pct = Math.max(4, Math.round((v / maxVal) * 100))
-          const isToday = d.date === new Date().toISOString().slice(0, 10)
-          const tip = isCalls ? `${d.date}: ${d.count} 次` : `${d.date}: ${formatTokens(d.tokens)}`
-          return (
-            <div key={d.date} className="flex-1 flex flex-col justify-end h-full group relative" title={tip}>
-              <div
-                className={`w-full rounded-sm transition-all duration-300 ${isToday ? 'bg-blue-500' : v > 0 ? 'bg-white/10 group-hover:bg-white/20' : 'bg-white/[0.04]'}`}
-                style={{ height: `${pct}%` }}
-              />
-            </div>
-          )
-        })}
-      </div>
-      <div className="flex justify-between text-[10px] text-white/30 font-mono">
-        <span>{counts[0]?.date.slice(5)}</span>
-        <span>{counts[Math.floor(counts.length / 2)]?.date.slice(5)}</span>
-        <span>{counts[counts.length - 1]?.date.slice(5)}</span>
+      <div className="bg-white/[0.04] rounded-lg p-2 pt-1">
+        <div className="text-[8px] text-white/30 mb-0.5">{unitLabel}</div>
+        <div className="flex">
+          {/* Y-axis ticks */}
+          <div className="flex flex-col justify-between pr-1 font-mono" style={{ width: 28, height: chartH }}>
+            {ticks.map((t, i) => (
+              <span key={i} className="text-[8px] text-white/30 text-right leading-none">{fmtTick(t)}</span>
+            ))}
+          </div>
+          {/* Chart bars */}
+          <div className="flex-1 flex items-end gap-px" style={{ height: chartH, borderLeft: '1px solid rgba(255,255,255,0.1)', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingLeft: 1 }}>
+            {counts.map((d: any, i: number) => {
+              const v = values[i]
+              const h = Math.max(2, Math.round((v / maxVal) * (chartH - 6)))
+              const isToday = d.date === new Date().toISOString().slice(0, 10)
+              const tip = isCalls ? `${d.date}: ${d.count} 次` : `${d.date}: ${formatTokens(d.tokens)}`
+              return (
+                <div key={d.date} className="flex-1 flex flex-col items-center group" title={tip}>
+                  <div
+                    className={`w-full rounded-t-sm transition-all duration-300 ${isToday ? 'bg-blue-500' : v > 0 ? 'bg-blue-400/50 group-hover:bg-blue-400/70' : 'bg-white/[0.06]'}`}
+                    style={{ height: h }}
+                  />
+                </div>
+              )
+            })}
+          </div>
+        </div>
+        {/* X-axis dates */}
+        <div className="flex mt-1" style={{ paddingLeft: 32 }}>
+          <div className="flex-1 flex justify-between text-[8px] text-white/30 font-mono">
+            <span>{counts[0]?.date.slice(5)}</span>
+            <span>{counts[Math.floor(counts.length / 2)]?.date.slice(5)}</span>
+            <span>{counts[counts.length - 1]?.date.slice(5)}</span>
+          </div>
+        </div>
       </div>
     </div>
   )

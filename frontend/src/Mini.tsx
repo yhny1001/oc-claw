@@ -476,7 +476,7 @@ export default function Mini() {
   const [enableClaudeCode, setEnableClaudeCode] = useState(true)
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [notifySound, setNotifySound] = useState<'default' | 'manbo'>('default')
-  const [waitingSound, setWaitingSound] = useState(true)
+  const [waitingSound, setWaitingSound] = useState(false)
   const [disableSleepAnim, setDisableSleepAnim] = useState(true)
 
   // Settings mode: panel becomes wider, shows settings content

@@ -56,6 +56,23 @@ const MAX_SLOTS = 10
 
 type PetState = 'idle' | 'working' | 'compacting'
 
+function FrozenImg({ src, style, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    if (!src) return
+    const img = new Image()
+    img.onload = () => {
+      const c = canvasRef.current
+      if (!c) return
+      c.width = img.naturalWidth
+      c.height = img.naturalHeight
+      c.getContext('2d')?.drawImage(img, 0, 0)
+    }
+    img.src = src
+  }, [src])
+  return <canvas ref={canvasRef} style={style} {...props as any} />
+}
+
 function getMiniGif(char: CharacterMeta | undefined, petState: PetState | boolean, useTop = false): string | undefined {
   // backward compat: boolean → PetState
   const state: PetState = typeof petState === 'boolean' ? (petState ? 'working' : 'idle') : petState
@@ -360,6 +377,7 @@ export default function Mini() {
   const [enableOpenClaw, setEnableOpenClaw] = useState(true)
   const [enableClaudeCode, setEnableClaudeCode] = useState(true)
   const [soundEnabled, setSoundEnabled] = useState(true)
+  const [disableSleepAnim, setDisableSleepAnim] = useState(true)
 
   // Settings mode: panel becomes wider, shows settings content
   const [settingsMode, setSettingsMode] = useState(false)
@@ -386,7 +404,7 @@ export default function Mini() {
     return () => cancelAnimationFrame(frame)
   }, [expanded])
 
-  const bobY = Math.sin(bobPhase / 600) * 3
+  const bobYRaw = Math.sin(bobPhase / 600) * 3
 
   // Load mini character from store
   const loadMiniChar = useCallback(async () => {
@@ -521,6 +539,8 @@ export default function Mini() {
       if (cc !== false) invoke('install_claude_hooks').catch(() => {})
       const snd = await store.get('sound_enabled')
       if (typeof snd === 'boolean') setSoundEnabled(snd)
+      const dsa = await store.get('disable_sleep_anim')
+      if (typeof dsa === 'boolean') setDisableSleepAnim(dsa)
       const ccChar = ((await store.get('claude_char')) as string) || 'default'
       setClaudeCharName(ccChar)
     })()
@@ -749,6 +769,7 @@ export default function Mini() {
   const claudeWorking = claudeSessions.some(cs => cs.status === 'processing' || cs.status === 'tool_running')
   const hasWorking = anySessionActive || Object.values(healthMap).some(Boolean) || claudeWorking || claudeCompacting
   const mainPetState: PetState = claudeCompacting ? 'compacting' : hasWorking ? 'working' : 'idle'
+  const bobY = (disableSleepAnim && mainPetState === 'idle') ? 0 : bobYRaw
   const miniGif = getMiniGif(miniChar ?? undefined, mainPetState, true)
   const inAgentDetail = selectedAgentId !== null
   const selectedAgent = agents.find(a => a.id === selectedAgentId)
@@ -780,9 +801,15 @@ export default function Mini() {
             position: 'relative',
           }}>
             {miniGif ? (
-              <img src={miniGif} alt="mini"
-                style={{ width: 40, height: 40, objectFit: 'contain' }}
-                draggable={false} />
+              disableSleepAnim && mainPetState === 'idle' ? (
+                <FrozenImg src={miniGif}
+                  style={{ width: 40, height: 40, objectFit: 'contain' }}
+                  draggable={false} />
+              ) : (
+                <img src={miniGif} alt="mini"
+                  style={{ width: 40, height: 40, objectFit: 'contain' }}
+                  draggable={false} />
+              )
             ) : (
               <div style={{
                 width: 40, height: 40, borderRadius: 10,
@@ -1035,7 +1062,7 @@ export default function Mini() {
                   )}
                   {settingsNav === 'settings' && (
                     <div className="h-full overflow-y-auto bg-[#151515] scrollbar-thin">
-                      <SettingsTab showWorkDetail={showWorkDetail} onToggleWorkDetail={toggleWorkDetail} />
+                      <SettingsTab showWorkDetail={showWorkDetail} onToggleWorkDetail={toggleWorkDetail} disableSleepAnim={disableSleepAnim} onToggleSleepAnim={async (v) => { setDisableSleepAnim(v); const store = await getStore(); await store.set('disable_sleep_anim', v); await store.save() }} />
                     </div>
                   )}
                 </div>

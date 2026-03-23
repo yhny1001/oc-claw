@@ -34,7 +34,7 @@ function CopyCode({ text }: { text: string }) {
   )
 }
 
-export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDetail: boolean; onToggleWorkDetail: (v: boolean) => void }) {
+export function SettingsTab({ showWorkDetail, onToggleWorkDetail, disableSleepAnim, onToggleSleepAnim }: { showWorkDetail: boolean; onToggleWorkDetail: (v: boolean) => void; disableSleepAnim: boolean; onToggleSleepAnim: (v: boolean) => void }) {
   const [ocMode, setOcMode] = useState<'local' | 'remote'>('local')
   const [sshHost, setSshHost] = useState('')
   const [sshUser, setSshUser] = useState('')
@@ -257,6 +257,19 @@ export function SettingsTab({ showWorkDetail, onToggleWorkDetail }: { showWorkDe
       </section>
 
       {/* 显示设置 */}
+      <section className="flex flex-col gap-4">
+        <h2 className="text-lg font-medium text-white">显示</h2>
+        <div className="bg-[#0f0f0f] border border-white/5 rounded-2xl overflow-hidden">
+          <div className="flex items-center justify-between p-4">
+            <div className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-white/90">关闭睡眠动画</span>
+              <span className="text-xs text-white/40">看板娘空闲时显示静态画面</span>
+            </div>
+            <Toggle checked={disableSleepAnim} onChange={onToggleSleepAnim} />
+          </div>
+        </div>
+      </section>
+
       {/* 关于 */}
       <section className="flex flex-col gap-4">
         <h2 className="text-lg font-medium text-white">关于</h2>

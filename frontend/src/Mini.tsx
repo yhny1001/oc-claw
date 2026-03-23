@@ -706,6 +706,7 @@ export default function Mini() {
     setSelectedClaudeSession(null)
     setSelectedSessionKey(null)
     const wasSettings = settingsModeRef.current
+    const delay = wasSettings ? 280 : 350
     setTimeout(async () => {
       settingsModeRef.current = false
       setSettingsMode(false)
@@ -722,7 +723,7 @@ export default function Mini() {
       // Show mascot at new position
       await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
       setHiding(false)
-    }, 300)
+    }, delay)
   }, [])
 
   const enterSettings = useCallback(async () => {
@@ -877,25 +878,49 @@ export default function Mini() {
           position: 'absolute', top: 0,
           left: '50%',
           transform: 'translateX(-50%)',
-          width: showPanel ? panelW : 60,
-          maxHeight: showPanel ? panelH : 0,
+          width: panelW,
+          height: settingsMode ? panelH : 'auto',
+          maxHeight: settingsMode ? undefined : panelH,
           overflow: 'hidden',
           background: '#1a1a1a',
-          borderRadius: showPanel ? (settingsMode ? '0 0 16px 16px' : '0 0 24px 24px') : '0 0 14px 14px',
+          clipPath: showPanel
+            ? `inset(0 0 0 0 round 0 0 ${settingsMode ? '16px 16px' : '24px 24px'})`
+            : `inset(0 calc(50% - 30px) calc(100% - 4px) calc(50% - 30px) round 0 0 8px 8px)`,
           boxShadow: showPanel
             ? '0 0 12px rgba(0,0,0,0.7)'
             : '0 2px 8px rgba(0,0,0,0.3)',
           transition: showPanel
-            ? 'width 0.35s cubic-bezier(0.16, 1, 0.3, 1), max-height 0.35s cubic-bezier(0.16, 1, 0.3, 1), border-radius 0.35s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease'
-            : 'width 0.3s cubic-bezier(0.25, 0.1, 0.25, 1), max-height 0.2s cubic-bezier(0.25, 0.1, 0.25, 1), border-radius 0.3s cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 0.25s ease',
+            ? 'clip-path 0.4s cubic-bezier(0.2, 1, 0.3, 1), box-shadow 0.3s ease'
+            : settingsMode
+              ? 'clip-path 0.25s cubic-bezier(0.3, 0, 0, 1), box-shadow 0.15s ease'
+              : 'clip-path 0.3s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.2s ease',
         }}>
+          {/* Grass background layer - independent from content opacity, visible during collapse */}
+          {!settingsMode && (
+            <div style={{
+              position: 'absolute', top: 36, left: 0, right: 0,
+              height: 30,
+              backgroundImage: 'url(/assets/grass-island.png)',
+              backgroundSize: '80px 100%',
+              backgroundRepeat: 'repeat-x',
+              backgroundPosition: 'bottom',
+              pointerEvents: 'none',
+              zIndex: 0,
+              filter: showPanel ? 'blur(0px)' : 'blur(8px)',
+              opacity: showPanel ? 1 : 0.6,
+              transition: showPanel
+                ? 'filter 0.3s ease, opacity 0.3s ease'
+                : 'filter 0.4s cubic-bezier(0.2, 0, 0, 1) 0.06s, opacity 0.4s cubic-bezier(0.2, 0, 0, 1) 0.06s',
+            }} />
+          )}
           <div style={{
+            position: 'relative', zIndex: 1,
             opacity: showPanel ? 1 : 0,
-            transform: showPanel ? 'scale(1) translateY(0)' : 'scale(0.8) translateY(-8px)',
+            transform: showPanel ? 'scale(1) translateY(0)' : 'scale(0.92) translateY(-8px)',
             transformOrigin: 'top center',
             transition: showPanel
-              ? 'opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
-              : 'opacity 0.12s ease-out, transform 0.12s ease-out',
+              ? 'opacity 0.25s cubic-bezier(0.2, 1, 0.3, 1) 0.08s, transform 0.4s cubic-bezier(0.2, 1, 0.3, 1)'
+              : 'opacity 0.08s ease-out, transform 0.08s ease-out',
             height: settingsMode ? '100vh' : 'auto',
             display: settingsMode ? 'flex' : 'block',
             flexDirection: 'column',
@@ -904,6 +929,7 @@ export default function Mini() {
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               height: 36, padding: '0 14px', flexShrink: 0,
+              background: '#1a1a1a',
               borderBottom: '1px solid rgba(255,255,255,0.06)',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
@@ -1005,7 +1031,7 @@ export default function Mini() {
                   >&#9881;</button>
                 )}
                 <button data-no-drag
-                  onClick={(e) => { e.stopPropagation(); collapse() }}
+                  onClick={(e) => { e.stopPropagation(); window.blur(); collapse() }}
                   style={{
                     background: 'none', border: 'none',
                     color: 'rgba(255,255,255,0.35)', fontSize: 13,
@@ -1024,6 +1050,27 @@ export default function Mini() {
                         <p className="text-sm text-white/50 mb-10">
                           将 Agent 与角色配对，配对后 Mini 中会显示对应角色的 GIF 动画。
                         </p>
+
+                        {/* System (看板娘) */}
+                        <div className="mb-8">
+                          <h2 className="text-xs font-bold text-white/30 uppercase tracking-widest mb-3 px-4">看板娘</h2>
+                          <div className="bg-[#0f0f0f] rounded-2xl border border-white/5 shadow-2xl overflow-hidden">
+                            <AgentAccordionItem
+                              agent={{ id: '__mini__', identityName: '看板娘' }}
+                              characters={characters}
+                              currentChar={miniChar?.name || ''}
+                              isOpen={openAccordionId === '__mini__'}
+                              onToggle={() => setOpenAccordionId(openAccordionId === '__mini__' ? null : '__mini__')}
+                              onOpenCreate={() => setIsCreateModalOpen(true)}
+                              onSelect={async (name) => {
+                                const store = await load('settings.json', { defaults: {}, autoSave: true })
+                                await store.set('mini_character', name)
+                                await store.save()
+                                loadMiniChar()
+                              }}
+                            />
+                          </div>
+                        </div>
 
                         {/* OpenClaw Agents */}
                         {enableOpenClaw && (
@@ -1076,27 +1123,6 @@ export default function Mini() {
                             </div>
                           </div>
                         )}
-
-                        {/* System (看板娘) */}
-                        <div className="mb-8">
-                          <h2 className="text-xs font-bold text-white/30 uppercase tracking-widest mb-3 px-4">System</h2>
-                          <div className="bg-[#0f0f0f] rounded-2xl border border-white/5 shadow-2xl overflow-hidden">
-                            <AgentAccordionItem
-                              agent={{ id: '__mini__', identityName: '看板娘' }}
-                              characters={characters}
-                              currentChar={miniChar?.name || ''}
-                              isOpen={openAccordionId === '__mini__'}
-                              onToggle={() => setOpenAccordionId(openAccordionId === '__mini__' ? null : '__mini__')}
-                              onOpenCreate={() => setIsCreateModalOpen(true)}
-                              onSelect={async (name) => {
-                                const store = await load('settings.json', { defaults: {}, autoSave: true })
-                                await store.set('mini_character', name)
-                                await store.save()
-                                loadMiniChar()
-                              }}
-                            />
-                          </div>
-                        </div>
 
                         {agents.length > 0 && characters.filter((c) => c.miniActions && Object.keys(c.miniActions).length > 0).length < agents.length && (
                           <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
@@ -1216,7 +1242,7 @@ export default function Mini() {
                 </div>
 
                 {/* Session bars */}
-                <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: '#1a1a1a' }}>
                   {allSessions.length === 0 && claudeSessions.length === 0 && (
                     <div style={{
                       color: 'rgba(255,255,255,0.2)', fontSize: 10,
@@ -1285,8 +1311,8 @@ export default function Mini() {
                                 onClick={(e) => { e.stopPropagation(); dismissedSessionsRef.current.set(`${s.agentId}:${s.key}`, s.updatedAt); setAllSessions(prev => prev.filter(ss => !(ss.agentId === s.agentId && ss.key === s.key))) }}
                                 style={{
                                   background: 'none', border: 'none', color: 'rgba(255,255,255,0.15)',
-                                  fontSize: 14, cursor: 'pointer', padding: '2px 4px', flexShrink: 0,
-                                  lineHeight: 1,
+                                  fontSize: 14, cursor: 'pointer', padding: '8px 10px', flexShrink: 0,
+                                  lineHeight: 1, margin: '-6px -6px -6px 0',
                                 }}
                                 onMouseEnter={(e) => e.currentTarget.style.color = 'rgba(255,255,255,0.5)'}
                                 onMouseLeave={(e) => e.currentTarget.style.color = 'rgba(255,255,255,0.15)'}
@@ -1344,8 +1370,8 @@ export default function Mini() {
                                 onClick={(e) => { e.stopPropagation(); invoke('remove_claude_session', { sessionId: cs.sessionId }).catch(() => {}); setClaudeSessions(prev => prev.filter(s => s.sessionId !== cs.sessionId)) }}
                                 style={{
                                   background: 'none', border: 'none', color: 'rgba(255,255,255,0.15)',
-                                  fontSize: 14, cursor: 'pointer', padding: '2px 4px', flexShrink: 0,
-                                  lineHeight: 1,
+                                  fontSize: 14, cursor: 'pointer', padding: '8px 10px', flexShrink: 0,
+                                  lineHeight: 1, margin: '-6px -6px -6px 0',
                                 }}
                                 onMouseEnter={(e) => e.currentTarget.style.color = 'rgba(255,255,255,0.5)'}
                                 onMouseLeave={(e) => e.currentTarget.style.color = 'rgba(255,255,255,0.15)'}

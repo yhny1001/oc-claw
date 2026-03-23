@@ -877,11 +877,11 @@ fn truncate_str(s: &str, max: usize) -> String {
 
 #[tauri::command]
 async fn get_agent_metrics(agent_id: String, mode: Option<String>, url: Option<String>, token: Option<String>, ssh_host: Option<String>, ssh_user: Option<String>) -> Result<AgentMetrics, String> {
+    log::info!("[get_agent_metrics] agent_id={} mode={:?} ssh_host={:?}", agent_id, mode, ssh_host);
     if mode.as_deref() == Some("remote") {
         let sh = ssh_host.as_deref().unwrap_or("");
         let su = ssh_user.as_deref().unwrap_or("");
         if !sh.is_empty() && !su.is_empty() {
-            // SSH-based: full local-like metrics via remote file reading
             let active = ssh_is_agent_active(sh, su, &agent_id).await;
 
             let mut metrics = AgentMetrics {
@@ -939,8 +939,8 @@ async fn get_agent_metrics(agent_id: String, mode: Option<String>, url: Option<S
             };
 
             let content = match ssh_read_file(sh, su, &session_file).await {
-                Ok(c) => c,
-                Err(_) => return Ok(metrics),
+                Ok(c) => { log::info!("[get_agent_metrics] SSH read session file OK, len={}", c.len()); c }
+                Err(e) => { log::error!("[get_agent_metrics] SSH read session file failed: {}", e); return Ok(metrics); }
             };
 
             let mut tool_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1060,6 +1060,8 @@ async fn get_agent_metrics(agent_id: String, mode: Option<String>, url: Option<S
             tool_vec.sort_by(|a, b| b.count.cmp(&a.count));
             metrics.tool_calls = tool_vec;
 
+            log::info!("[get_agent_metrics] SSH result: active={} recent_actions={} tool_calls={} message_count={} current_task={:?}",
+                metrics.active, metrics.recent_actions.len(), metrics.tool_calls.len(), metrics.message_count, metrics.current_task);
             return Ok(metrics);
         }
         // Gateway API fallback

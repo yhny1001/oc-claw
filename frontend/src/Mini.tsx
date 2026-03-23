@@ -1054,9 +1054,16 @@ export default function Mini() {
                   </span>
                 </div>
               </div>
-            ) : (!inAgentDetail && !selectedClaudeSession && !selectedSessionKey) ? (
+            ) : (
+              <AnimatePresence mode="wait">
+              {(!inAgentDetail && !selectedClaudeSession && !selectedSessionKey) ? (
               /* ===== Normal: character island + sessions ===== */
-              <div className="mini-fade-in">
+              <motion.div key="main"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15 }}
+              >
                 {/* Character island */}
                 <div style={{
                   position: 'relative', height: 100,
@@ -1277,10 +1284,15 @@ export default function Mini() {
                     })()}
                   </div>
                 </div>
-              </div>
+              </motion.div>
             ) : selectedSessionKey ? (
               /* ===== OpenClaw session chat ===== */
-              <div className="scrollbar-thin" style={{ maxHeight: 524, overflowY: 'auto', padding: '12px 14px' }}>
+              <motion.div key="oc-chat"
+                initial={{ opacity: 0, x: 30 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -30 }}
+                transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+                className="scrollbar-thin" style={{ maxHeight: 524, overflowY: 'auto', padding: '12px 14px' }}>
                 {sessionMessages.length === 0 ? (
                   <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, textAlign: 'center', padding: '30px 0' }}>
                     loading...
@@ -1314,10 +1326,15 @@ export default function Mini() {
                     ))}
                   </div>
                 )}
-              </div>
+              </motion.div>
             ) : selectedClaudeSession ? (
               /* ===== Claude session chat ===== */
-              <div className="scrollbar-thin" style={{ maxHeight: 524, overflowY: 'auto', padding: '12px 14px' }}>
+              <motion.div key="claude-chat"
+                initial={{ opacity: 0, x: 30 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -30 }}
+                transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+                className="scrollbar-thin" style={{ maxHeight: 524, overflowY: 'auto', padding: '12px 14px' }}>
                 {claudeConversation.length === 0 ? (
                   <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, textAlign: 'center', padding: '30px 0' }}>
                     loading...
@@ -1351,14 +1368,23 @@ export default function Mini() {
                     ))}
                   </div>
                 )}
-              </div>
+              </motion.div>
             ) : (
               /* ===== Agent detail panel (ui-2 style) ===== */
-              <AgentDetailView
-                agent={selectedAgent}
-                metrics={metrics}
-                extraInfo={extraInfo}
-              />
+              <motion.div key="agent-detail"
+                initial={{ opacity: 0, x: 30 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -30 }}
+                transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
+              >
+                <AgentDetailView
+                  agent={selectedAgent}
+                  metrics={metrics}
+                  extraInfo={extraInfo}
+                />
+              </motion.div>
+            )}
+              </AnimatePresence>
             )}
           </div>
         </div>

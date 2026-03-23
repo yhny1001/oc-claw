@@ -2830,18 +2830,21 @@ hook_event = input_data.get('hook_event_name', '')
 
 status_map = {
     'UserPromptSubmit': 'processing',
+    'PreCompact': 'compacting',
+    'SessionStart': 'waiting_for_input',
+    'SessionEnd': 'ended',
     'PreToolUse': 'tool_running',
     'PostToolUse': 'processing',
-    'Stop': 'stopped',
-    'SubagentStop': 'stopped',
-    'PreCompact': 'compacting',
+    'PermissionRequest': 'waiting_for_input',
+    'Stop': 'waiting_for_input',
+    'SubagentStop': 'waiting_for_input',
 }
 
 output = {
     'sessionId': input_data.get('session_id', ''),
     'cwd': input_data.get('cwd', ''),
     'event': hook_event,
-    'status': status_map.get(hook_event, 'waiting'),
+    'status': input_data.get('status', status_map.get(hook_event, 'waiting')),
     'interactive': True,
 }
 
@@ -2893,7 +2896,7 @@ except:
         .entry("hooks").or_insert(serde_json::json!({}))
         .as_object_mut().ok_or("hooks not object")?;
 
-    let hook_events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "PreCompact"];
+    let hook_events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "PreCompact", "SessionStart", "SessionEnd", "PermissionRequest"];
     for event in hook_events {
         let event_hooks = hooks.entry(event).or_insert(serde_json::json!([]));
         let arr = event_hooks.as_array_mut().ok_or("not array")?;
@@ -2944,7 +2947,24 @@ fn start_claude_socket_server(claude_state: Arc<Mutex<HashMap<String, ClaudeSess
                             let session_id = event.get("sessionId").and_then(|v| v.as_str()).unwrap_or("").to_string();
                             if session_id.is_empty() { return; }
 
-                            let status = event.get("status").and_then(|v| v.as_str()).unwrap_or("waiting").to_string();
+                            let hook_event = event.get("event").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let raw_status = event.get("status").and_then(|v| v.as_str()).unwrap_or("waiting").to_string();
+
+                            // Event-based state determination (matching notchi's SessionStore.process)
+                            let status = match hook_event.as_str() {
+                                "Stop" | "SubagentStop" => "stopped".to_string(),
+                                "SessionEnd" => "ended".to_string(),
+                                "PermissionRequest" => "waiting".to_string(),
+                                _ => {
+                                    // For other events, use the status but treat waiting_for_input as idle
+                                    if raw_status == "waiting_for_input" {
+                                        "waiting".to_string()
+                                    } else {
+                                        raw_status.clone()
+                                    }
+                                }
+                            };
+
                             let was_processing;
 
                             {
@@ -2953,36 +2973,42 @@ fn start_claude_socket_server(claude_state: Arc<Mutex<HashMap<String, ClaudeSess
                                     .map(|s| s.status == "processing" || s.status == "tool_running")
                                     .unwrap_or(false);
 
-                                let session = sessions.entry(session_id.clone()).or_insert_with(|| ClaudeSession {
-                                    session_id: session_id.clone(),
-                                    cwd: String::new(),
-                                    status: "idle".to_string(),
-                                    tool: None,
-                                    tool_input: None,
-                                    user_prompt: None,
-                                    interactive: true,
-                                    updated_at: 0,
-                                });
+                                // SessionEnd: remove session entirely
+                                if hook_event == "SessionEnd" {
+                                    sessions.remove(&session_id);
+                                } else {
+                                    let session = sessions.entry(session_id.clone()).or_insert_with(|| ClaudeSession {
+                                        session_id: session_id.clone(),
+                                        cwd: String::new(),
+                                        status: "idle".to_string(),
+                                        tool: None,
+                                        tool_input: None,
+                                        user_prompt: None,
+                                        interactive: true,
+                                        updated_at: 0,
+                                    });
 
-                                session.status = status.clone();
-                                session.cwd = event.get("cwd").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                                session.interactive = event.get("interactive").and_then(|v| v.as_bool()).unwrap_or(true);
-                                session.updated_at = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+                                    session.status = status.clone();
+                                    session.cwd = event.get("cwd").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                                    session.interactive = event.get("interactive").and_then(|v| v.as_bool()).unwrap_or(true);
+                                    session.updated_at = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
 
-                                if let Some(t) = event.get("tool").and_then(|v| v.as_str()) {
-                                    if !t.is_empty() { session.tool = Some(t.to_string()); }
-                                }
-                                if let Some(t) = event.get("toolInput").and_then(|v| v.as_str()) {
-                                    if !t.is_empty() { session.tool_input = Some(t.to_string()); }
-                                }
-                                if let Some(t) = event.get("userPrompt").and_then(|v| v.as_str()) {
-                                    if !t.is_empty() { session.user_prompt = Some(t.to_string()); }
-                                }
+                                    if let Some(t) = event.get("tool").and_then(|v| v.as_str()) {
+                                        if !t.is_empty() { session.tool = Some(t.to_string()); }
+                                    }
+                                    if let Some(t) = event.get("toolInput").and_then(|v| v.as_str()) {
+                                        if !t.is_empty() { session.tool_input = Some(t.to_string()); }
+                                    }
+                                    if let Some(t) = event.get("userPrompt").and_then(|v| v.as_str()) {
+                                        if !t.is_empty() { session.user_prompt = Some(t.to_string()); }
+                                    }
 
-                                // Clean up stopped sessions after a delay
-                                if status == "stopped" {
-                                    // Keep for display, will be cleaned up by timeout
+                                    // Clear tool info on Stop (task finished)
+                                    if hook_event == "Stop" || hook_event == "SubagentStop" {
+                                        session.tool = None;
+                                        session.tool_input = None;
+                                    }
                                 }
                             }
 
@@ -2990,7 +3016,7 @@ fn start_claude_socket_server(claude_state: Arc<Mutex<HashMap<String, ClaudeSess
                             let _ = app.emit("claude-session-update", &session_id);
 
                             // If transitioned from processing to stopped/waiting, emit completion
-                            if was_processing && (status == "stopped" || status == "waiting") {
+                            if was_processing && (status == "stopped" || status == "waiting" || status == "ended") {
                                 let _ = app.emit("claude-task-complete", &session_id);
                             }
                         }

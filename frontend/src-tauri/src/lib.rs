@@ -3175,7 +3175,8 @@ fn start_claude_socket_server(claude_state: Arc<Mutex<HashMap<String, ClaudeSess
 
                             // If transitioned from processing to stopped/waiting, emit completion
                             if was_processing && (status == "stopped" || status == "waiting" || status == "ended") {
-                                let _ = app.emit("claude-task-complete", &session_id);
+                                let is_waiting = status == "waiting";
+                                let _ = app.emit("claude-task-complete", serde_json::json!({"sessionId": session_id, "waiting": is_waiting}));
                             }
 
                             // File watcher: start on UserPromptSubmit, stop on Stop/SessionEnd

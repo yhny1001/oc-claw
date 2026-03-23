@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import type { AgentMetrics } from '../lib/types'
 import { formatTokens, formatTime, formatDuration } from '../lib/agents'
 
@@ -109,14 +110,9 @@ export function AgentDetailView({ agent, metrics, extraInfo }: AgentDetailViewPr
         {/* Hero Profile */}
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-lg shadow-inner border border-white/10">
-                {agent?.identityEmoji || '🚀'}
-              </div>
-              <div className="flex flex-col">
-                <h1 className="text-lg font-semibold text-white tracking-tight">{agent?.identityName || agent?.id || '未知'}</h1>
-                {metrics.channel && <span className="text-xs text-white/40">via {metrics.channel}</span>}
-              </div>
+            <div className="flex flex-col">
+              <h1 className="text-lg font-semibold text-white tracking-tight">{agent?.identityName || agent?.id || '未知'}</h1>
+              {metrics.channel && <span className="text-xs text-white/40">via {metrics.channel}</span>}
             </div>
             <span className={`px-2.5 py-1 rounded-full text-xs font-medium border flex items-center gap-1.5 ${
               metrics.active
@@ -132,7 +128,9 @@ export function AgentDetailView({ agent, metrics, extraInfo }: AgentDetailViewPr
             <div className="bg-white/[0.03] border border-white/5 rounded-2xl p-4 flex flex-col gap-2 relative overflow-hidden group">
               <div className="absolute inset-0 bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
               <span className="text-[10px] font-medium text-white/40 uppercase tracking-wider relative z-10">当前任务</span>
-              <p className="text-sm text-white/90 leading-relaxed relative z-10">{metrics.currentTask}</p>
+              <div className="text-sm text-white/90 leading-relaxed relative z-10 markdown-content">
+                <ReactMarkdown>{metrics.currentTask}</ReactMarkdown>
+              </div>
             </div>
           )}
         </div>
@@ -145,7 +143,9 @@ export function AgentDetailView({ agent, metrics, extraInfo }: AgentDetailViewPr
               {metrics.recentActions.slice(0, 5).map((action, i) => (
                 <div key={i} className="flex items-start gap-3 opacity-80 hover:opacity-100 transition-opacity">
                   <span className={`mt-0.5 text-[10px] ${action.type === 'tool' ? 'text-blue-400' : 'text-emerald-400'}`}>●</span>
-                  <span className="text-white/70 flex-1 leading-relaxed truncate">{action.summary}</span>
+                  <span className="text-white/70 flex-1 leading-relaxed truncate markdown-content markdown-inline">
+                    <ReactMarkdown>{action.summary}</ReactMarkdown>
+                  </span>
                   {action.timestamp && <span className="text-white/30">{formatTime(action.timestamp).split(' ')[1]}</span>}
                 </div>
               ))}

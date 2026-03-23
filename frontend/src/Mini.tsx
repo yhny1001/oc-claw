@@ -5,6 +5,7 @@ import { load } from '@tauri-apps/plugin-store'
 import { listen } from '@tauri-apps/api/event'
 import { ChevronDown, Check, Pen, Plus, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
+import ReactMarkdown from 'react-markdown'
 import { SettingsTab } from './components/SettingsTab'
 import { AgentDetailView } from './components/AgentDetailView'
 import { CreateCharacterModal } from './components/CreateCharacterModal'
@@ -1292,12 +1293,12 @@ export default function Mini() {
                       ) : (
                         <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                           <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#2ecc71', marginTop: 6, flexShrink: 0 }} />
-                          <div style={{
+                          <div className="markdown-content" style={{
                             color: '#ddd', fontSize: 13, lineHeight: 1.5,
-                            wordBreak: 'break-word', whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
                             maxWidth: '90%',
                           }}>
-                            {msg.text.length > 500 ? msg.text.slice(0, 500) + '...' : msg.text}
+                            <ReactMarkdown>{msg.text.length > 500 ? msg.text.slice(0, 500) + '...' : msg.text}</ReactMarkdown>
                           </div>
                         </div>
                       )
@@ -1329,12 +1330,12 @@ export default function Mini() {
                       ) : (
                         <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                           <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#007AFF', marginTop: 6, flexShrink: 0 }} />
-                          <div style={{
+                          <div className="markdown-content" style={{
                             color: '#ddd', fontSize: 13, lineHeight: 1.5,
-                            wordBreak: 'break-word', whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
                             maxWidth: '90%',
                           }}>
-                            {msg.text.length > 500 ? msg.text.slice(0, 500) + '...' : msg.text}
+                            <ReactMarkdown>{msg.text.length > 500 ? msg.text.slice(0, 500) + '...' : msg.text}</ReactMarkdown>
                           </div>
                         </div>
                       )

@@ -3126,7 +3126,7 @@ fn start_claude_socket_server(claude_state: Arc<Mutex<HashMap<String, ClaudeSess
                             {
                                 let mut sessions = state.lock().unwrap();
                                 was_processing = sessions.get(&session_id)
-                                    .map(|s| s.is_processing)
+                                    .map(|s| matches!(s.status.as_str(), "processing" | "tool_running" | "compacting"))
                                     .unwrap_or(false);
 
                                 // SessionEnd: remove session entirely

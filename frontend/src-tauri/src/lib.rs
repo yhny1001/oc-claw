@@ -1840,7 +1840,7 @@ async fn set_mini_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), 
     #[cfg(target_os = "macos")]
     {
         let win_clone = win.clone();
-        let _ = app.run_on_main_thread(move || {
+        app.run_on_main_thread(move || {
             use objc2::runtime::{AnyClass, AnyObject};
             use objc2::msg_send;
             use objc2_foundation::{NSRect, NSPoint, NSSize};
@@ -1888,7 +1888,7 @@ async fn set_mini_expanded(app: tauri::AppHandle, expanded: bool) -> Result<(), 
                     }
                 }
             }
-        });
+        }).map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -1903,7 +1903,7 @@ async fn set_mini_size(app: tauri::AppHandle, restore: bool) -> Result<(), Strin
     #[cfg(target_os = "macos")]
     {
         let win_clone = win.clone();
-        let _ = app.run_on_main_thread(move || {
+        app.run_on_main_thread(move || {
             use objc2::runtime::{AnyClass, AnyObject};
             use objc2::msg_send;
             use objc2_foundation::{NSRect, NSPoint, NSSize};
@@ -1952,7 +1952,7 @@ async fn set_mini_size(app: tauri::AppHandle, restore: bool) -> Result<(), Strin
                     }
                 }
             }
-        });
+        }).map_err(|e| e.to_string())?;
     }
 
     Ok(())

@@ -449,7 +449,14 @@ export default function Mini() {
         } catch { /* ignore */ }
       })
     )
-    const filtered = results.filter(s => {
+    const seen = new Set<string>()
+    const deduped = results.filter(s => {
+      const k = `${s.agentId}:${s.key}`
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    })
+    const filtered = deduped.filter(s => {
       const key = `${s.agentId}:${s.key}`
       const dismissedAt = dismissedSessionsRef.current.get(key)
       if (dismissedAt !== undefined && s.updatedAt > dismissedAt) {
@@ -551,7 +558,8 @@ export default function Mini() {
     let cancelled = false
     const fetchMsgs = async () => {
       try {
-        const msgs = await invoke('get_session_messages', { agentId: selectedSessionKey.agentId, sessionKey: selectedSessionKey.key }) as any[]
+        const oc = await getOcParams()
+        const msgs = await invoke('get_session_messages', { agentId: selectedSessionKey.agentId, sessionKey: selectedSessionKey.key, ...oc }) as any[]
         if (!cancelled) setSessionMessages(msgs)
       } catch { if (!cancelled) setSessionMessages([]) }
     }

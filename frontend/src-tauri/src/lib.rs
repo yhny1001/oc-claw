@@ -151,6 +151,62 @@ async fn invoke_tool(url: &str, token: &str, tool: &str, args: serde_json::Value
     serde_json::from_str(&text).map_err(|e| format!("parse remote response: {} body: {}", e, &text[..text.len().min(200)]))
 }
 
+/// Extract sessions array from remote API response, handling both formats:
+/// - Old: { "result": [ ... ] }
+/// - New (MCP): { "result": { "content": [...], "details": { "sessions": [...] } } }
+fn extract_sessions(result: &serde_json::Value) -> Vec<serde_json::Value> {
+    let r = result.get("result").unwrap_or(result);
+    if let Some(sessions) = r.pointer("/details/sessions").and_then(|v| v.as_array()) {
+        return sessions.clone();
+    }
+    if let Some(arr) = r.as_array() {
+        return arr.clone();
+    }
+    vec![]
+}
+
+/// Check if a session is active (local mode fallback).
+fn is_session_active(s: &serde_json::Value) -> bool {
+    if let Some(active) = s.get("active").and_then(|v| v.as_bool()) {
+        return active;
+    }
+    if let Some(updated_at) = s.get("updatedAt").and_then(|v| v.as_u64()) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        return now_ms.saturating_sub(updated_at) < 3_000;
+    }
+    false
+}
+
+/// Check Queue status from session_status statusText.
+fn is_queue_active(status_text: &str) -> bool {
+    status_text.lines().any(|line| {
+        if let Some(q) = line.split("Queue:").nth(1) {
+            let q = q.trim();
+            !q.starts_with("collect") && !q.starts_with("idle") && !q.starts_with("waiting")
+        } else {
+            false
+        }
+    })
+}
+
+/// Remote activity detection: Queue active (instant) OR updatedAt within 3s (smooth stop).
+async fn is_remote_session_active(url: &str, token: &str, session_key: &str, s: &serde_json::Value) -> bool {
+    if let Ok(status) = invoke_tool(url, token, "session_status", serde_json::json!({"sessionKey": session_key})).await {
+        let sr = status.get("result").unwrap_or(&status);
+        let det = sr.get("details").unwrap_or(sr);
+        if let Some(text) = det["statusText"].as_str() {
+            if is_queue_active(text) {
+                return true;
+            }
+        }
+    }
+    // Queue says idle — use updatedAt as a brief buffer for smooth transition
+    is_session_active(s)
+}
+
 fn sessions_json_path(agent_id: &str) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let agent_dir = if agent_id.is_empty() { "main" } else { agent_id };
@@ -444,8 +500,32 @@ async fn get_agents(mode: Option<String>, url: Option<String>, token: Option<Str
         let url = url.as_deref().unwrap_or("");
         let token = token.as_deref().unwrap_or("");
         let result = invoke_tool(url, token, "agents_list", serde_json::json!({})).await?;
-        let agents_val = result.get("result").unwrap_or(&result);
-        let agents: Vec<AgentInfo> = serde_json::from_value(agents_val.clone()).map_err(|e| e.to_string())?;
+        let r = result.get("result").unwrap_or(&result);
+        // New MCP: result.details.agents is an array; Old: result is an array or map
+        let agents_arr = r.pointer("/details/agents").and_then(|v| v.as_array())
+            .or_else(|| r.as_array());
+        let agents: Vec<AgentInfo> = if let Some(arr) = agents_arr {
+            arr.iter().filter_map(|v| {
+                let id = v["id"].as_str()?.to_string();
+                Some(AgentInfo {
+                    id,
+                    identity_name: v.get("identityName").or_else(|| v.get("identity_name")).and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    identity_emoji: v.get("identityEmoji").or_else(|| v.get("identity_emoji")).and_then(|v| v.as_str()).map(|s| s.to_string()),
+                })
+            }).collect()
+        } else if let Some(map) = r.as_object() {
+            map.iter()
+                .filter(|(_, v)| v.is_object())
+                .map(|(id, val)| {
+                    AgentInfo {
+                        id: id.clone(),
+                        identity_name: val.get("identityName").or_else(|| val.get("identity_name")).and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        identity_emoji: val.get("identityEmoji").or_else(|| val.get("identity_emoji")).and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    }
+                }).collect()
+        } else {
+            return Err(format!("unexpected agents_list format: {}", r));
+        };
         return Ok(agents);
     }
 
@@ -475,13 +555,18 @@ async fn get_health(mode: Option<String>, url: Option<String>, token: Option<Str
         let url = url.as_deref().unwrap_or("");
         let token = token.as_deref().unwrap_or("");
         let result = invoke_tool(url, token, "sessions_list", serde_json::json!({"activeMinutes": 5})).await?;
-        // Parse remote response: extract active agent IDs from sessions
-        let empty_arr = vec![];
-        let sessions = result.get("result").and_then(|r| r.as_array()).unwrap_or(&empty_arr);
+        let sessions = extract_sessions(&result);
         let mut agent_active: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
-        for s in sessions {
-            let agent_id = s["agentId"].as_str().unwrap_or("main").to_string();
-            let active = s["active"].as_bool().unwrap_or(false);
+        for s in &sessions {
+            let agent_id = s["agentId"].as_str()
+                .or_else(|| s["key"].as_str().and_then(|k| k.split(':').nth(1)))
+                .unwrap_or("main").to_string();
+            let session_key = s["key"].as_str().unwrap_or("");
+            let active = if !session_key.is_empty() {
+                is_remote_session_active(url, token, session_key, s).await
+            } else {
+                is_session_active(s)
+            };
             let entry = agent_active.entry(agent_id).or_insert(false);
             if active { *entry = true; }
         }
@@ -651,38 +736,79 @@ async fn get_agent_metrics(agent_id: String, mode: Option<String>, url: Option<S
     if mode.as_deref() == Some("remote") {
         let url = url.as_deref().unwrap_or("");
         let tok = token.as_deref().unwrap_or("");
-        let result = invoke_tool(url, tok, "agent_metrics", serde_json::json!({"agentId": agent_id})).await?;
-        let m = result.get("result").unwrap_or(&result);
+        // Build metrics from sessions_list + session_status
+        let result = invoke_tool(url, tok, "sessions_list", serde_json::json!({"agentId": agent_id, "activeMinutes": 60})).await?;
+        let sessions = extract_sessions(&result);
+        let active_count = sessions.iter().filter(|s| is_session_active(s)).count();
+        let total_tokens: u64 = sessions.iter().map(|s| s["totalTokens"].as_u64().unwrap_or(0)).sum();
+        let model = sessions.iter().find_map(|s| s["model"].as_str().map(|s| s.to_string()));
+        let channel = sessions.iter().find_map(|s| s["channel"].as_str().map(|s| s.to_string()));
+        let last_updated = sessions.iter().filter_map(|s| s["updatedAt"].as_u64()).max();
+        let last_activity = last_updated.map(|ms| {
+            let secs = (ms / 1000) as i64;
+            chrono::DateTime::from_timestamp(secs, 0)
+                .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                .unwrap_or_default()
+        });
+
+        // Get real-time status from session_status for the primary session
+        let mut input_tokens: u64 = 0;
+        let mut output_tokens: u64 = 0;
+        let mut current_task: Option<String> = None;
+        let default_key = format!("agent:{}:main", agent_id);
+        let session_key = sessions.first()
+            .and_then(|s| s["key"].as_str())
+            .unwrap_or(&default_key);
+        if let Ok(status_result) = invoke_tool(url, tok, "session_status", serde_json::json!({"sessionKey": session_key})).await {
+            let sr = status_result.get("result").unwrap_or(&status_result);
+            let det = sr.get("details").unwrap_or(sr);
+            if let Some(text) = det["statusText"].as_str() {
+                // Parse statusText lines for tokens and queue info
+                for line in text.lines() {
+                    if line.contains("Tokens:") {
+                        // e.g. "🧮 Tokens: 3 in / 65 out"
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        for (i, p) in parts.iter().enumerate() {
+                            if *p == "in" && i > 0 {
+                                input_tokens = parts[i-1].replace(",", "").replace("k", "000").parse().unwrap_or(0);
+                            }
+                            if *p == "out" && i > 0 {
+                                output_tokens = parts[i-1].replace(",", "").replace("k", "000").parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                    if line.contains("Queue:") {
+                        // e.g. "🦢 Queue: collect (depth 0)" or "🦢 Queue: running tool_name"
+                        let queue_part = line.split("Queue:").nth(1).unwrap_or("").trim();
+                        if queue_part.starts_with("running") || queue_part.starts_with("thinking") || queue_part.starts_with("streaming") {
+                            current_task = Some(queue_part.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
         let metrics = AgentMetrics {
             agent_id: agent_id.clone(),
-            active: m["active"].as_bool().unwrap_or(false),
-            current_model: m["currentModel"].as_str().map(|s| s.to_string()),
-            thinking_level: m["thinkingLevel"].as_str().map(|s| s.to_string()),
-            active_session_count: m["activeSessionCount"].as_u64().unwrap_or(0) as usize,
-            current_task: m["currentTask"].as_str().map(|s| s.to_string()),
-            current_tool: m["currentTool"].as_str().map(|s| s.to_string()),
-            total_tokens: m["totalTokens"].as_u64().unwrap_or(0),
-            input_tokens: m["inputTokens"].as_u64().unwrap_or(0),
-            output_tokens: m["outputTokens"].as_u64().unwrap_or(0),
-            cache_read_tokens: m["cacheReadTokens"].as_u64().unwrap_or(0),
-            cache_write_tokens: m["cacheWriteTokens"].as_u64().unwrap_or(0),
-            total_cost: m["totalCost"].as_f64().unwrap_or(0.0),
-            tool_calls: m["toolCalls"].as_array().map(|arr| arr.iter().filter_map(|tc| {
-                Some(ToolCallStat { name: tc["name"].as_str()?.to_string(), count: tc["count"].as_u64()? as usize })
-            }).collect()).unwrap_or_default(),
-            recent_actions: m["recentActions"].as_array().map(|arr| arr.iter().filter_map(|a| {
-                Some(RecentAction {
-                    action_type: a["type"].as_str().unwrap_or("text").to_string(),
-                    summary: a["summary"].as_str()?.to_string(),
-                    detail: a["detail"].as_str().map(|s| s.to_string()),
-                    timestamp: a["timestamp"].as_str().map(|s| s.to_string()),
-                })
-            }).collect()).unwrap_or_default(),
-            error_count: m["errorCount"].as_u64().unwrap_or(0) as usize,
-            message_count: m["messageCount"].as_u64().unwrap_or(0) as usize,
-            session_start: m["sessionStart"].as_str().map(|s| s.to_string()),
-            last_activity: m["lastActivity"].as_str().map(|s| s.to_string()),
-            channel: m["channel"].as_str().map(|s| s.to_string()),
+            active: active_count > 0,
+            current_model: model,
+            thinking_level: None,
+            active_session_count: active_count,
+            current_task,
+            current_tool: None,
+            total_tokens,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            total_cost: 0.0,
+            tool_calls: vec![],
+            recent_actions: vec![],
+            error_count: 0,
+            message_count: sessions.len(),
+            session_start: None,
+            last_activity,
+            channel,
         };
         return Ok(metrics);
     }
@@ -1596,20 +1722,20 @@ async fn get_agent_sessions(agent_id: String, mode: Option<String>, url: Option<
         let url = url.as_deref().unwrap_or("");
         let token = token.as_deref().unwrap_or("");
         let result = invoke_tool(url, token, "sessions_list", serde_json::json!({"agentId": agent_id, "activeMinutes": 60})).await?;
-        let sessions_val = result.get("result").unwrap_or(&result);
-        let empty_arr = vec![];
-        let arr = sessions_val.as_array().unwrap_or(&empty_arr);
+        let arr = extract_sessions(&result);
         let mut sessions: Vec<MiniSessionInfo> = arr.iter().filter_map(|s| {
             let key = s["key"].as_str().or(s["sessionId"].as_str())?.to_string();
             if key.contains(":cron:") { return None; }
             Some(MiniSessionInfo {
                 key: key.clone(),
-                agent_id: s["agentId"].as_str().unwrap_or(&agent_id).to_string(),
+                agent_id: s["agentId"].as_str()
+                    .or_else(|| s["key"].as_str().and_then(|k| k.split(':').nth(1)))
+                    .unwrap_or(&agent_id).to_string(),
                 session_id: s["sessionId"].as_str().unwrap_or(&key).to_string(),
                 label: key.clone(),
                 channel: s["channel"].as_str().map(|s| s.to_string()),
                 updated_at: s["updatedAt"].as_u64().unwrap_or(0),
-                active: s["active"].as_bool().unwrap_or(false),
+                active: is_session_active(s),
                 last_user_msg: s["lastUserMsg"].as_str().map(|s| s.to_string()),
                 last_assistant_msg: s["lastAssistantMsg"].as_str().map(|s| s.to_string()),
             })
@@ -1698,7 +1824,50 @@ async fn get_agent_sessions(agent_id: String, mode: Option<String>, url: Option<
 }
 
 #[tauri::command]
-async fn get_session_messages(agent_id: String, session_key: String) -> Result<Vec<ChatMessage>, String> {
+async fn get_session_messages(agent_id: String, session_key: String, mode: Option<String>, url: Option<String>, token: Option<String>) -> Result<Vec<ChatMessage>, String> {
+    if mode.as_deref() == Some("remote") {
+        let url = url.as_deref().unwrap_or("");
+        let token = token.as_deref().unwrap_or("");
+        let result = invoke_tool(url, token, "sessions_history", serde_json::json!({
+            "sessionKey": session_key,
+            "limit": 50,
+            "includeTools": false
+        })).await?;
+        let r = result.get("result").unwrap_or(&result);
+        let det = r.get("details").unwrap_or(r);
+        let empty_arr = vec![];
+        let messages_arr = det.get("messages").and_then(|v| v.as_array()).unwrap_or(&empty_arr);
+        let mut messages: Vec<ChatMessage> = vec![];
+        for msg in messages_arr {
+            let role = msg["role"].as_str().unwrap_or("");
+            if role != "user" && role != "assistant" { continue; }
+            let content = if let Some(arr) = msg["content"].as_array() {
+                arr.iter()
+                    .filter(|item| item["type"].as_str() == Some("text"))
+                    .filter_map(|item| item["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else if let Some(s) = msg["content"].as_str() {
+                s.to_string()
+            } else { continue };
+            if content.is_empty() { continue; }
+            let ts = msg["timestamp"].as_u64().map(|ms| {
+                chrono::DateTime::from_timestamp((ms / 1000) as i64, 0)
+                    .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                    .unwrap_or_default()
+            });
+            let truncated = if content.chars().count() > 500 {
+                format!("{}...", content.chars().take(500).collect::<String>())
+            } else { content };
+            messages.push(ChatMessage {
+                role: role.to_string(),
+                text: truncated,
+                timestamp: ts,
+            });
+        }
+        return Ok(messages);
+    }
+
     let path = sessions_json_path(&agent_id);
     let content = tokio::fs::read_to_string(&path)
         .await
@@ -1778,15 +1947,20 @@ async fn get_active_sessions(mode: Option<String>, url: Option<String>, token: O
         let url = url.as_deref().unwrap_or("");
         let token = token.as_deref().unwrap_or("");
         let result = invoke_tool(url, token, "sessions_list", serde_json::json!({"activeMinutes": 5})).await?;
-        let empty_arr = vec![];
-        let sessions = result.get("result").and_then(|r| r.as_array()).unwrap_or(&empty_arr);
-        let keys: Vec<String> = sessions.iter()
-            .filter(|s| s["active"].as_bool().unwrap_or(false))
-            .filter_map(|s| {
-                let agent_id = s["agentId"].as_str().unwrap_or("main");
-                let key = s["key"].as_str().or(s["sessionId"].as_str())?;
-                Some(format!("{}:{}", agent_id, key))
-            }).collect();
+        let sessions = extract_sessions(&result);
+        let mut keys: Vec<String> = vec![];
+        for s in &sessions {
+            let session_key = match s["key"].as_str() {
+                Some(k) => k,
+                None => continue,
+            };
+            let agent_id = s["agentId"].as_str()
+                .or_else(|| session_key.split(':').nth(1))
+                .unwrap_or("main");
+            if is_remote_session_active(url, token, session_key, s).await {
+                keys.push(format!("{}:{}", agent_id, session_key));
+            }
+        }
         return Ok(keys);
     }
 

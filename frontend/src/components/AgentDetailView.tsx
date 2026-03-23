@@ -208,8 +208,11 @@ export function AgentDetailView({ agent, metrics, extraInfo }: AgentDetailViewPr
                 const maxCount = metrics.toolCalls[0].count
                 const pct = Math.max(5, Math.round((tool.count / maxCount) * 100))
                 return (
-                  <div key={tool.name} className="flex items-center gap-3 text-sm group">
-                    <span className="w-20 text-white/60 text-xs font-mono group-hover:text-white/90 transition-colors">{tool.name}</span>
+                  <div key={tool.name} className="flex items-center gap-3 text-sm group relative">
+                    <span className="w-20 text-white/60 text-xs font-mono group-hover:text-white/90 transition-colors truncate shrink-0">{tool.name}</span>
+                    <div className="absolute left-0 bottom-full mb-1 hidden group-hover:block z-10 bg-[#1a1a1a] border border-white/10 rounded-lg px-3 py-2 text-xs text-white/90 font-mono whitespace-pre-wrap max-w-[200px] break-all shadow-lg">
+                      {tool.name}
+                    </div>
                     <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
                       <div className="h-full bg-blue-500/80 rounded-full" style={{ width: `${pct}%` }} />
                     </div>

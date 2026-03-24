@@ -248,6 +248,7 @@ async fn ensure_ssh_master(ssh_host: &str, ssh_user: &str) -> Result<(), String>
 }
 
 /// Execute a command on remote host via SSH, reusing ControlMaster socket.
+/// If the command fails (e.g. stale socket), removes the socket and retries once.
 async fn ssh_exec(ssh_host: &str, ssh_user: &str, cmd: &str) -> Result<String, String> {
     ensure_ssh_master(ssh_host, ssh_user).await?;
     let control_path = format!("/tmp/oc-claw-ssh-{}@{}:22", ssh_user, ssh_host);
@@ -259,6 +260,26 @@ async fn ssh_exec(ssh_host: &str, ssh_user: &str, cmd: &str) -> Result<String, S
         "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH && {}",
         cmd
     );
+    let output = tokio::process::Command::new("ssh")
+        .args([
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=5",
+            "-o", &cp,
+            &target,
+            &safe_cmd,
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| format!("ssh: {}", e))?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+    }
+    // First attempt failed — likely stale socket. Remove it and retry once.
+    log::warn!("[ssh] command failed, removing stale socket and retrying");
+    let _ = tokio::fs::remove_file(&control_path).await;
+    ensure_ssh_master(ssh_host, ssh_user).await?;
     let output = tokio::process::Command::new("ssh")
         .args([
             "-o", "BatchMode=yes",
@@ -727,7 +748,7 @@ async fn get_agents(mode: Option<String>, url: Option<String>, token: Option<Str
         let sh = ssh_host.as_deref().unwrap_or("");
         let su = ssh_user.as_deref().unwrap_or("");
         if !sh.is_empty() && !su.is_empty() {
-            let dirs = ssh_exec(sh, su, "ls -1 $HOME/.openclaw/agents/ 2>/dev/null").await.unwrap_or_default();
+            let dirs = ssh_exec(sh, su, "ls -1 $HOME/.openclaw/agents/ 2>/dev/null").await?;
             let mut agents: Vec<AgentInfo> = Vec::new();
             for id in dirs.lines().filter(|l| !l.trim().is_empty()) {
                 let id = id.trim().to_string();

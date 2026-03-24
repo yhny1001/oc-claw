@@ -893,7 +893,7 @@ export default function Mini() {
           background: '#1a1a1a',
           clipPath: showPanel
             ? `inset(0 0 0 0 round 0 0 ${settingsMode ? '16px 16px' : '24px 24px'})`
-            : `inset(0 calc(50% - 30px) calc(100% - 4px) calc(50% - 30px) round 0 0 8px 8px)`,
+            : `inset(0 calc(50% - 30px) calc(100% + 200px) calc(50% - 30px) round 0 0 8px 8px)`,
           boxShadow: showPanel
             ? '0 0 12px rgba(0,0,0,0.7)'
             : '0 2px 8px rgba(0,0,0,0.3)',

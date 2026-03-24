@@ -417,6 +417,7 @@ export default function Mini() {
   const setIsCreateModalOpen = (v: boolean) => { isCreateModalOpenRef.current = v; _setIsCreateModalOpen(v) }
   const [hiding, setHiding] = useState(false)
   const [pinned, setPinned] = useState(false)
+  const collapsingRef = useRef(false)
 
   // Bob animation (only when collapsed, avoid 60fps re-renders in settings mode)
   useEffect(() => {
@@ -688,9 +689,9 @@ export default function Mini() {
   const sessionSlots = [...ocSlots, ...claudeSlots].slice(0, MAX_SLOTS)
 
   const expand = useCallback(async () => {
+    if (collapsingRef.current) return
     setHiding(true)
-    // Wait for the browser to paint the hidden state before resizing the window
-    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    await new Promise<void>((r) => setTimeout(r, 50))
     await invoke('set_mini_expanded', { expanded: true, position: mascotPositionRef.current })
     setHiding(false)
     setExpanded(true)
@@ -700,6 +701,8 @@ export default function Mini() {
   }, [])
 
   const collapse = useCallback(async () => {
+    if (collapsingRef.current) return
+    collapsingRef.current = true
     setIsCreateModalOpen(false)
     setShowPanel(false)
     setSelectedAgentId(null)
@@ -713,16 +716,18 @@ export default function Mini() {
       // Hide mascot first to avoid flicker at old position
       setHiding(true)
       setExpanded(false)
-      // Resize window to collapsed position while hidden
-      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+      // Use setTimeout instead of rAF (rAF may not fire when window is blurred)
+      await new Promise<void>((r) => setTimeout(r, 50))
       if (wasSettings) {
         await invoke('set_mini_size', { restore: true, position: mascotPositionRef.current })
       } else {
         await invoke('set_mini_expanded', { expanded: false, position: mascotPositionRef.current })
       }
       // Show mascot at new position
-      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+      await new Promise<void>((r) => setTimeout(r, 50))
       setHiding(false)
+      // Brief cooldown to prevent focus event from immediately re-expanding
+      setTimeout(() => { collapsingRef.current = false }, 300)
     }, delay)
   }, [])
 
@@ -799,7 +804,10 @@ export default function Mini() {
 
   useEffect(() => {
     if (expanded) return
-    const onFocus = () => expand()
+    const onFocus = () => {
+      if (collapsingRef.current) return
+      expand()
+    }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [expanded, expand])

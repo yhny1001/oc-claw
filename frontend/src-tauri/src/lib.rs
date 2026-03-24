@@ -252,13 +252,19 @@ async fn ssh_exec(ssh_host: &str, ssh_user: &str, cmd: &str) -> Result<String, S
     let control_path = format!("/tmp/oc-claw-ssh-{}@{}:22", ssh_user, ssh_host);
     let target = format!("{}@{}", ssh_user, ssh_host);
     let cp = format!("ControlPath={}", control_path);
+    // Prepend a safe system PATH so basic commands (ls, cat, tail…) are always
+    // available regardless of how the remote server's login environment is configured.
+    let safe_cmd = format!(
+        "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH && {}",
+        cmd
+    );
     let output = tokio::process::Command::new("ssh")
         .args([
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=5",
             "-o", &cp,
             &target,
-            cmd,
+            &safe_cmd,
         ])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

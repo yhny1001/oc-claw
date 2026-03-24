@@ -14,6 +14,7 @@ import type { AgentMetrics } from './lib/types'
 
 interface CharacterMeta {
   name: string
+  builtin?: boolean
   ip?: string
   workGifs: string[]
   restGifs: string[]

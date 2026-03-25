@@ -183,15 +183,16 @@ function getMiniGif(char: CharacterMeta | undefined, petState: PetState | boolea
   if (useTop && c.miniActions['top']?.length) {
     const topGifs = c.miniActions['top']
     // Priority: waiting(look) > compacting(eat) > working > idle(sleep)
+    // Each state falls through to the next if no matching GIF is found
     if (state === 'waiting') {
       const look = topGifs.find((g) => g.includes('look') || g.includes('wait'))
       if (look) return look
     }
     if (state === 'compacting') {
-      const eat = topGifs.find((g) => g.includes('eat') || g.includes('compact'))
+      const eat = topGifs.find((g) => g.includes('eat') || g.includes('compact') || g.includes('power'))
       if (eat) return eat
     }
-    if (state === 'working') {
+    if (state === 'working' || state === 'compacting' || state === 'waiting') {
       const work = topGifs.find((g) => g.includes('work'))
       if (work) return work
     }
@@ -206,12 +207,12 @@ function getMiniGif(char: CharacterMeta | undefined, petState: PetState | boolea
     if (lookGifs.length > 0) return lookGifs[0]
   }
   if (state === 'compacting') {
-    const eatGifs = allGifs.filter((g) => g.includes('eat') || g.includes('compact'))
+    const eatGifs = allGifs.filter((g) => g.includes('eat') || g.includes('compact') || g.includes('power'))
     if (eatGifs.length > 0) return eatGifs[0]
   }
   const idleGifs = allGifs.filter((g) => g.includes('idle'))
   const actionGifs = allGifs.filter((g) => !g.includes('idle'))
-  if (state === 'working' && actionGifs.length > 0) return actionGifs[0]
+  if ((state === 'working' || state === 'compacting' || state === 'waiting') && actionGifs.length > 0) return actionGifs[0]
   return idleGifs[0] || allGifs[0]
 }
 
@@ -244,7 +245,7 @@ function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, 
           <div className="relative">
             <div className="w-12 h-12 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center overflow-hidden">
               {gif ? (
-                <img src={gif} alt="" className="w-full h-full object-contain" style={{ imageRendering: 'pixelated' }} draggable={false} />
+                <img key={gif} src={gif} alt="" className="w-full h-full object-contain" style={{ imageRendering: 'pixelated' }} draggable={false} />
               ) : (
                 <span className="text-white/40 text-xl">{agent.identityEmoji || '?'}</span>
               )}

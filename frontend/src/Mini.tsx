@@ -529,6 +529,7 @@ export default function Mini() {
     } catch (e) { console.warn('[fetchAgents] get_agents failed:', e) }
   }, [])
 
+  const prevHealthRef = useRef<Record<string, boolean>>({})
   const pollHealth = useCallback(async () => {
     try {
       const connections = await loadOcConnections()
@@ -541,6 +542,19 @@ export default function Mini() {
           health.agents.forEach((a) => { hMap[prefix + a.agentId] = a.active })
         } catch { /* ignore */ }
       }))
+      // Detect agent becoming inactive → play completion sound
+      const prev = prevHealthRef.current
+      if (Object.keys(prev).length > 0) {
+        const anyBecameInactive = Object.entries(prev).some(([id, wasActive]) => wasActive && !hMap[id])
+        if (anyBecameInactive && soundEnabledRef.current) {
+          if (notifySoundRef.current === 'manbo') {
+            new Audio('/audio/manbo.m4a').play().catch(() => {})
+          } else {
+            invoke('play_sound', { name: 'Purr' }).catch(() => {})
+          }
+        }
+      }
+      prevHealthRef.current = hMap
       setHealthMap(hMap)
     } catch { /* ignore */ }
   }, [])

@@ -2968,7 +2968,6 @@ fn start_session_file_watcher(
 
                 let new_size = std::fs::metadata(&path2).map(|m| m.len()).unwrap_or(0);
                 let mut prev = last_size2.lock().unwrap();
-                let file_truncated = new_size < *prev;
                 *prev = new_size;
 
                 let mut sessions_guard = sessions2.lock().unwrap();
@@ -2979,16 +2978,8 @@ fn start_session_file_watcher(
 
                 let mut changed = false;
 
-                // Compact detection: file was rewritten (truncated) while in compacting state
-                if session.status == "compacting" && file_truncated {
-                    log::info!("File watcher: compact done for session {}, file truncated", sid2);
-                    session.status = "stopped".to_string();
-                    session.is_processing = false;
-                    changed = true;
-                }
-
                 // Interruption detection: working but file shows interrupted
-                if !changed && (session.status == "processing" || session.status == "tool_running") {
+                if session.status == "processing" || session.status == "tool_running" {
                     if check_interrupted(&path2) {
                         log::info!("File watcher: interrupted session {}", sid2);
                         session.status = "stopped".to_string();
@@ -3033,7 +3024,10 @@ fn stop_session_file_watcher(session_id: &str) {
 #[tauri::command]
 async fn get_claude_sessions(state: tauri::State<'_, ClaudeState>) -> Result<Vec<ClaudeSession>, String> {
     let sessions = state.sessions.lock().map_err(|e| e.to_string())?;
-    let mut list: Vec<ClaudeSession> = sessions.values().cloned().collect();
+    let mut list: Vec<ClaudeSession> = sessions.values()
+        .filter(|s| !s.cwd.is_empty())
+        .cloned()
+        .collect();
     list.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     Ok(list)
 }
@@ -3186,6 +3180,11 @@ async fn get_claude_conversation(session_id: String) -> Result<Vec<ChatMessage>,
         if text.starts_with("<command-name>") || text.starts_with("[Request interrupted") { continue; }
         if text.starts_with("<task-notification>") || text.starts_with("<local-command") { continue; }
 
+        // Replace compaction summary with short indicator
+        let text = if text.starts_with("This session is being continued from a previous conversation") {
+            "/compact".to_string()
+        } else { text };
+
         let timestamp = parsed.get("timestamp").and_then(|t| t.as_str()).map(String::from);
         messages.push(ChatMessage { role: role.to_string(), text, timestamp });
     }
@@ -3201,14 +3200,24 @@ async fn install_claude_hooks() -> Result<(), String> {
     let hooks_dir = claude_dir.join("hooks");
     std::fs::create_dir_all(&hooks_dir).map_err(|e| e.to_string())?;
 
-    // Write hook script
+    // Write hook script (matching notchi's notchi-hook.sh)
     let hook_script = r#"#!/bin/bash
 # ooclaw Claude Code hook - forwards events to /tmp/ooclaw-claude.sock
 SOCKET_PATH="/tmp/ooclaw-claude.sock"
 [ -S "$SOCKET_PATH" ] || exit 0
 
+# Detect non-interactive (claude -p / --print) sessions
+IS_INTERACTIVE=true
+for CHECK_PID in $PPID $(ps -o ppid= -p $PPID 2>/dev/null | tr -d ' '); do
+    if ps -o args= -p "$CHECK_PID" 2>/dev/null | grep -qE '(^| )(-p|--print)( |$)'; then
+        IS_INTERACTIVE=false
+        break
+    fi
+done
+export OOCLAW_INTERACTIVE=$IS_INTERACTIVE
+
 /usr/bin/python3 -c "
-import json, socket, sys
+import json, os, socket, sys
 
 try:
     input_data = json.load(sys.stdin)
@@ -3217,12 +3226,24 @@ except:
 
 hook_event = input_data.get('hook_event_name', '')
 
+status_map = {
+    'UserPromptSubmit': 'processing',
+    'PreCompact': 'compacting',
+    'SessionStart': 'waiting_for_input',
+    'SessionEnd': 'ended',
+    'PreToolUse': 'running_tool',
+    'PostToolUse': 'processing',
+    'PermissionRequest': 'waiting_for_input',
+    'Stop': 'waiting_for_input',
+    'SubagentStop': 'waiting_for_input',
+}
+
 output = {
     'sessionId': input_data.get('session_id', ''),
     'cwd': input_data.get('cwd', ''),
     'event': hook_event,
-    'claudeStatus': input_data.get('status', 'unknown'),
-    'interactive': True,
+    'claudeStatus': input_data.get('status', status_map.get(hook_event, 'unknown')),
+    'interactive': os.environ.get('OOCLAW_INTERACTIVE', 'true') == 'true',
 }
 
 if hook_event == 'UserPromptSubmit':
@@ -3356,7 +3377,7 @@ fn start_claude_socket_server(claude_state: Arc<Mutex<HashMap<String, ClaudeSess
                             let user_prompt = event.get("userPrompt").and_then(|v| v.as_str()).unwrap_or("");
                             let is_local_slash = if user_prompt.starts_with('/') {
                                 let cmd = user_prompt.split_whitespace().next().unwrap_or("");
-                                matches!(cmd, "/clear" | "/help" | "/cost" | "/status" | "/vim" | "/fast" | "/model" | "/login" | "/logout")
+                                matches!(cmd, "/clear" | "/compact" | "/help" | "/cost" | "/status" | "/vim" | "/fast" | "/model" | "/login" | "/logout")
                             } else { false };
 
                             // Event-based task determination (matching notchi's SessionStore.process)
@@ -3383,17 +3404,19 @@ fn start_claude_socket_server(claude_state: Arc<Mutex<HashMap<String, ClaudeSess
 
                             // Notchi default: if Claude reports waiting_for_input,
                             // any active task should be overridden to idle
-                            if !is_processing && matches!(status.as_str(), "compacting" | "processing" | "tool_running") {
+                            // (but preserve "compacting" — PreCompact is an explicit state)
+                            if !is_processing && matches!(status.as_str(), "processing" | "tool_running") {
                                 status = "stopped".to_string();
                             }
 
                             let was_processing;
+                            let was_compacting;
 
                             {
                                 let mut sessions = state.lock().unwrap();
-                                was_processing = sessions.get(&session_id)
-                                    .map(|s| matches!(s.status.as_str(), "processing" | "tool_running" | "compacting"))
-                                    .unwrap_or(false);
+                                let prev_status = sessions.get(&session_id).map(|s| s.status.clone()).unwrap_or_default();
+                                was_processing = matches!(prev_status.as_str(), "processing" | "tool_running" | "compacting");
+                                was_compacting = prev_status == "compacting";
 
                                 // SessionEnd: remove session entirely
                                 if hook_event == "SessionEnd" {
@@ -3440,7 +3463,8 @@ fn start_claude_socket_server(claude_state: Arc<Mutex<HashMap<String, ClaudeSess
                             let _ = app.emit("claude-session-update", &session_id);
 
                             // If transitioned from processing to stopped/waiting, emit completion
-                            if was_processing && (status == "stopped" || status == "waiting" || status == "ended") {
+                            // Skip sound for compact completion (compacting → stopped)
+                            if was_processing && !was_compacting && (status == "stopped" || status == "waiting" || status == "ended") {
                                 let is_waiting = status == "waiting";
                                 let _ = app.emit("claude-task-complete", serde_json::json!({"sessionId": session_id, "waiting": is_waiting}));
                             }

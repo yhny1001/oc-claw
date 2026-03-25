@@ -303,7 +303,7 @@ export function SettingsTab({ disableSleepAnim, onToggleSleepAnim, notifySound, 
                   onClick={() => onChangeNotifySound(s)}
                   className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${notifySound === s ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/60'}`}
                 >
-                  {s === 'default' ? '默认' : 'Manbo'}
+                  {s === 'default' ? '默认' : '曼波'}
                 </button>
               ))}
             </div>

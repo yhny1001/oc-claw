@@ -1917,7 +1917,7 @@ async fn open_mini(app: tauri::AppHandle) -> Result<(), String> {
                         let behavior: usize = (1 << 0) | (1 << 4) | (1 << 8) | (1 << 6);
                         let _: () = msg_send![obj, setCollectionBehavior: behavior];
                     }
-                    let screen_frame: Option<(f64, f64, f64, f64)> = unsafe {
+                    let screen_info: Option<(f64, f64, f64, f64, f64)> = unsafe {
                         let cls = match AnyClass::get(c"NSScreen") {
                             Some(c) => c,
                             None => return,
@@ -1929,12 +1929,13 @@ async fn open_mini(app: tauri::AppHandle) -> Result<(), String> {
                         let screen: *mut AnyObject = msg_send![&*screens, objectAtIndex: 0usize];
                         if screen.is_null() { return; }
                         let frame: NSRect = msg_send![&*screen, frame];
-                        Some((frame.origin.x, frame.origin.y, frame.size.width, frame.size.height))
+                        let notch_off = get_notch_offset(screen);
+                        Some((frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, notch_off))
                     };
-                    if let Some((sx, sy, sw, sh)) = screen_frame {
+                    if let Some((sx, sy, sw, sh, notch_off)) = screen_info {
                         let win_w = 60.0;
                         let win_h = 45.0;
-                        let x = sx + sw / 2.0 + 80.0;
+                        let x = sx + sw / 2.0 + notch_off;
                         let y = sy + sh - win_h;
                         let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(win_w, win_h));
                         unsafe {
@@ -1988,7 +1989,7 @@ async fn open_mini(app: tauri::AppHandle) -> Result<(), String> {
                 }
 
                 // Get screen frame and position window directly via NSWindow setFrame
-                let screen_frame: Option<(f64, f64, f64, f64)> = unsafe {
+                let screen_info: Option<(f64, f64, f64, f64, f64)> = unsafe {
                     let cls = match AnyClass::get(c"NSScreen") {
                         Some(c) => c,
                         None => return,
@@ -2000,14 +2001,15 @@ async fn open_mini(app: tauri::AppHandle) -> Result<(), String> {
                     let screen: *mut AnyObject = msg_send![&*screens, objectAtIndex: 0usize];
                     if screen.is_null() { return; }
                     let frame: NSRect = msg_send![&*screen, frame];
-                    Some((frame.origin.x, frame.origin.y, frame.size.width, frame.size.height))
+                    let notch_off = get_notch_offset(screen);
+                    Some((frame.origin.x, frame.origin.y, frame.size.width, frame.size.height, notch_off))
                 };
 
-                if let Some((sx, sy, sw, sh)) = screen_frame {
+                if let Some((sx, sy, sw, sh, notch_off)) = screen_info {
                     // Start collapsed: small window right of notch
                     let win_w = 60.0;
                     let win_h = 45.0;
-                    let x = sx + sw / 2.0 + 80.0;
+                    let x = sx + sw / 2.0 + notch_off;
                     let y = sy + sh - win_h;
                     let frame = NSRect::new(
                         NSPoint::new(x, y),
@@ -2038,12 +2040,35 @@ async fn close_mini(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// Compute collapsed mascot x position based on side preference.
-fn collapsed_x(sx: f64, sw: f64, win_w: f64, position: &str) -> f64 {
+fn collapsed_x(sx: f64, sw: f64, win_w: f64, position: &str, notch_offset: f64) -> f64 {
     if position == "left" {
-        sx + sw / 2.0 - 80.0 - win_w
+        sx + sw / 2.0 - notch_offset - win_w
     } else {
-        sx + sw / 2.0 + 80.0
+        sx + sw / 2.0 + notch_offset
     }
+}
+
+/// Get the notch half-width (distance from screen center to notch edge) using
+/// macOS 12+ `auxiliaryTopRightArea` API. Falls back to 80pt for older systems
+/// or screens without a notch (external displays, pre-notch Macs).
+#[cfg(target_os = "macos")]
+unsafe fn get_notch_offset(screen: *mut objc2::runtime::AnyObject) -> f64 {
+    use objc2::msg_send;
+    use objc2_foundation::NSRect;
+
+    if screen.is_null() { return 80.0; }
+    let sel = objc2::runtime::Sel::register(c"auxiliaryTopRightArea");
+    let responds: bool = msg_send![&*screen, respondsToSelector: sel];
+    if responds {
+        let right_area: NSRect = msg_send![&*screen, auxiliaryTopRightArea];
+        if right_area.size.width > 0.0 {
+            let frame: NSRect = msg_send![&*screen, frame];
+            let center_x = frame.origin.x + frame.size.width / 2.0;
+            let half_w = right_area.origin.x - center_x;
+            if half_w > 10.0 { return half_w; }
+        }
+    }
+    80.0
 }
 
 /// Resize/reposition the mini window between collapsed (small, right of notch)
@@ -2064,7 +2089,7 @@ async fn set_mini_expanded(app: tauri::AppHandle, expanded: bool, position: Opti
             if let Ok(ns_win) = win_clone.ns_window() {
                 let obj = unsafe { &*(ns_win as *mut AnyObject) };
 
-                let screen_frame: Option<(f64, f64, f64, f64)> = unsafe {
+                let screen_info: Option<(f64, f64, f64, f64, f64)> = unsafe {
                     let cls = match AnyClass::get(c"NSScreen") {
                         Some(c) => c,
                         None => return,
@@ -2076,10 +2101,11 @@ async fn set_mini_expanded(app: tauri::AppHandle, expanded: bool, position: Opti
                     let screen: *mut AnyObject = msg_send![&*screens, objectAtIndex: 0usize];
                     if screen.is_null() { return; }
                     let sf: NSRect = msg_send![&*screen, frame];
-                    Some((sf.origin.x, sf.origin.y, sf.size.width, sf.size.height))
+                    let notch_off = get_notch_offset(screen);
+                    Some((sf.origin.x, sf.origin.y, sf.size.width, sf.size.height, notch_off))
                 };
 
-                if let Some((sx, sy, sw, sh)) = screen_frame {
+                if let Some((sx, sy, sw, sh, notch_off)) = screen_info {
                     unsafe {
                         let _: () = msg_send![obj, setLevel: 27isize];
                     }
@@ -2095,7 +2121,7 @@ async fn set_mini_expanded(app: tauri::AppHandle, expanded: bool, position: Opti
                     } else {
                         let win_w = 60.0;
                         let win_h = 45.0;
-                        let x = collapsed_x(sx, sw, win_w, &pos);
+                        let x = collapsed_x(sx, sw, win_w, &pos, notch_off);
                         let y = sy + sh - win_h;
                         let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(win_w, win_h));
                         unsafe {
@@ -2128,7 +2154,7 @@ async fn set_mini_size(app: tauri::AppHandle, restore: bool, position: Option<St
             if let Ok(ns_win) = win_clone.ns_window() {
                 let obj = unsafe { &*(ns_win as *mut AnyObject) };
 
-                let screen_frame: Option<(f64, f64, f64, f64)> = unsafe {
+                let screen_info: Option<(f64, f64, f64, f64, f64)> = unsafe {
                     let cls = match AnyClass::get(c"NSScreen") {
                         Some(c) => c,
                         None => return,
@@ -2140,15 +2166,16 @@ async fn set_mini_size(app: tauri::AppHandle, restore: bool, position: Option<St
                     let screen: *mut AnyObject = msg_send![&*screens, objectAtIndex: 0usize];
                     if screen.is_null() { return; }
                     let sf: NSRect = msg_send![&*screen, frame];
-                    Some((sf.origin.x, sf.origin.y, sf.size.width, sf.size.height))
+                    let notch_off = get_notch_offset(screen);
+                    Some((sf.origin.x, sf.origin.y, sf.size.width, sf.size.height, notch_off))
                 };
 
-                if let Some((sx, sy, sw, sh)) = screen_frame {
+                if let Some((sx, sy, sw, sh, notch_off)) = screen_info {
                     if restore {
                         // Restore to collapsed: small window beside notch
                         let win_w = 60.0;
                         let win_h = 45.0;
-                        let x = collapsed_x(sx, sw, win_w, &pos);
+                        let x = collapsed_x(sx, sw, win_w, &pos, notch_off);
                         let y = sy + sh - win_h;
                         let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(win_w, win_h));
                         unsafe {
@@ -3587,7 +3614,7 @@ pub fn run() {
                             let _: () = msg_send![obj, setCollectionBehavior: behavior];
                         }
 
-                        let screen_frame: Option<(f64, f64, f64, f64)> = unsafe {
+                        let screen_info: Option<(f64, f64, f64, f64, f64)> = unsafe {
                             let cls = match AnyClass::get(c"NSScreen") {
                                 Some(c) => c,
                                 None => return,
@@ -3599,13 +3626,14 @@ pub fn run() {
                             let screen: *mut AnyObject = msg_send![&*screens, objectAtIndex: 0usize];
                             if screen.is_null() { return; }
                             let sf: NSRect = msg_send![&*screen, frame];
-                            Some((sf.origin.x, sf.origin.y, sf.size.width, sf.size.height))
+                            let notch_off = get_notch_offset(screen);
+                            Some((sf.origin.x, sf.origin.y, sf.size.width, sf.size.height, notch_off))
                         };
 
-                        if let Some((sx, sy, sw, sh)) = screen_frame {
+                        if let Some((sx, sy, sw, sh, notch_off)) = screen_info {
                             let win_w = 60.0;
                             let win_h = 45.0;
-                            let x = sx + sw / 2.0 + 80.0;
+                            let x = sx + sw / 2.0 + notch_off;
                             let y = sy + sh - win_h;
                             let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(win_w, win_h));
                             unsafe {

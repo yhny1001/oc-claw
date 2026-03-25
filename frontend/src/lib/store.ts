@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
 import { load } from '@tauri-apps/plugin-store'
-import type { CharacterMeta } from './types'
+import type { CharacterMeta, OcConnection } from './types'
 
 export async function getStore() {
   return load('settings.json', { defaults: {}, autoSave: true })
@@ -95,6 +95,33 @@ export async function setActiveCharacter(name: string) {
   await store.set('active_character', name)
   await store.save()
   await emit('character-changed')
+}
+
+/** Load OC connections, migrating from old single-connection format if needed. */
+export async function loadOcConnections(): Promise<OcConnection[]> {
+  const store = await getStore()
+  const existing = await store.get('oc_connections') as OcConnection[] | null
+  if (existing) return existing
+
+  // Migrate from old format
+  const mode = ((await store.get('oc_mode')) as string) || 'local'
+  const host = ((await store.get('ssh_host')) as string) || ''
+  const user = ((await store.get('ssh_user')) as string) || ''
+  const connections: OcConnection[] = []
+  if (mode === 'remote' && host && user) {
+    connections.push({ id: crypto.randomUUID(), type: 'remote', host, user })
+  } else {
+    connections.push({ id: crypto.randomUUID(), type: 'local' })
+  }
+  await store.set('oc_connections', connections)
+  await store.save()
+  return connections
+}
+
+export async function saveOcConnections(connections: OcConnection[]) {
+  const store = await getStore()
+  await store.set('oc_connections', connections)
+  await store.save()
 }
 
 export function fileToDataUrl(file: File): Promise<string> {

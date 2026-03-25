@@ -1,34 +1,45 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use percent_encoding::percent_decode_str;
 
-static SSH_FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
-static SSH_FAIL_EPOCH: AtomicU64 = AtomicU64::new(0);
+/// Per-host SSH backoff state.
+struct SshBackoffState {
+    fail_count: u32,
+    fail_epoch: u64,
+}
+
+static SSH_BACKOFF: std::sync::OnceLock<Mutex<HashMap<String, SshBackoffState>>> = std::sync::OnceLock::new();
+
+fn ssh_backoff_map() -> &'static Mutex<HashMap<String, SshBackoffState>> {
+    SSH_BACKOFF.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 fn unix_now() -> u64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
-fn ssh_backoff_remaining() -> Option<u64> {
-    let failures = SSH_FAIL_COUNT.load(Ordering::Relaxed);
-    if failures == 0 { return None; }
-    let fail_time = SSH_FAIL_EPOCH.load(Ordering::Relaxed);
-    let cooldown = std::cmp::min(15u64 * 2u64.pow(failures.saturating_sub(1)), 300);
-    let elapsed = unix_now().saturating_sub(fail_time);
+fn ssh_backoff_remaining(host_key: &str) -> Option<u64> {
+    let map = ssh_backoff_map().lock().unwrap();
+    let state = map.get(host_key)?;
+    if state.fail_count == 0 { return None; }
+    let cooldown = std::cmp::min(15u64 * 2u64.pow(state.fail_count.saturating_sub(1)), 300);
+    let elapsed = unix_now().saturating_sub(state.fail_epoch);
     if elapsed < cooldown { Some(cooldown - elapsed) } else { None }
 }
 
-fn ssh_backoff_record_failure() {
-    SSH_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
-    SSH_FAIL_EPOCH.store(unix_now(), Ordering::Relaxed);
+fn ssh_backoff_record_failure(host_key: &str) {
+    let mut map = ssh_backoff_map().lock().unwrap();
+    let state = map.entry(host_key.to_string()).or_insert(SshBackoffState { fail_count: 0, fail_epoch: 0 });
+    state.fail_count += 1;
+    state.fail_epoch = unix_now();
 }
 
-fn ssh_backoff_reset() {
-    SSH_FAIL_COUNT.store(0, Ordering::Relaxed);
-    SSH_FAIL_EPOCH.store(0, Ordering::Relaxed);
+fn ssh_backoff_reset(host_key: &str) {
+    let mut map = ssh_backoff_map().lock().unwrap();
+    map.remove(host_key);
 }
 
 use tauri::{
@@ -257,22 +268,26 @@ fn check_agent_active_from_lines(lines: &[String]) -> bool {
 /// Implements exponential backoff on connection failure (15s, 30s, 60s, … capped at 300s)
 /// to avoid flooding the server with reconnection attempts.
 async fn ensure_ssh_master(ssh_host: &str, ssh_user: &str) -> Result<(), String> {
-    if let Some(remaining) = ssh_backoff_remaining() {
-        return Err(format!("SSH connection backing off, retry in {}s", remaining));
+    let host_key = format!("{}@{}", ssh_user, ssh_host);
+    if let Some(remaining) = ssh_backoff_remaining(&host_key) {
+        return Err(format!("SSH connection to {} backing off, retry in {}s", host_key, remaining));
     }
 
+    // Per-host lock so different hosts can establish masters in parallel
     use std::sync::OnceLock;
     use tokio::sync::Mutex as TokioMutex;
-    static LOCK: OnceLock<TokioMutex<()>> = OnceLock::new();
-    let lock = LOCK.get_or_init(|| TokioMutex::new(()));
+    static LOCKS: OnceLock<Mutex<HashMap<String, std::sync::Arc<TokioMutex<()>>>>> = OnceLock::new();
+    let lock = {
+        let mut locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+        locks.entry(host_key.clone()).or_insert_with(|| Arc::new(TokioMutex::new(()))).clone()
+    };
     let _guard = lock.lock().await;
 
-    let control_path = format!("/tmp/oc-claw-ssh-{}@{}:22", ssh_user, ssh_host);
+    let control_path = format!("/tmp/oc-claw-ssh-{}:22", host_key);
     if std::path::Path::new(&control_path).exists() { return Ok(()); }
 
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let key_path = format!("{}/.ssh/id_ed25519", home);
-    let target = format!("{}@{}", ssh_user, ssh_host);
     let cp = format!("ControlPath={}", control_path);
     let output = tokio::process::Command::new("ssh")
         .args([
@@ -281,10 +296,12 @@ async fn ensure_ssh_master(ssh_host: &str, ssh_user: &str) -> Result<(), String>
             "-o", "ConnectTimeout=10",
             "-o", "ControlMaster=yes",
             "-o", &cp,
-            "-o", "ControlPersist=300",
+            "-o", "ControlPersist=600",
+            "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=3",
             "-i", &key_path,
             "-fN",
-            &target,
+            &host_key,
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -293,12 +310,12 @@ async fn ensure_ssh_master(ssh_host: &str, ssh_user: &str) -> Result<(), String>
         .map_err(|e| format!("ssh master: {}", e))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        ssh_backoff_record_failure();
-        let count = SSH_FAIL_COUNT.load(Ordering::Relaxed);
-        log::warn!("[ssh] connection failed (attempt {}), entering backoff", count);
+        ssh_backoff_record_failure(&host_key);
+        let count = ssh_backoff_map().lock().unwrap().get(&host_key).map(|s| s.fail_count).unwrap_or(0);
+        log::warn!("[ssh] connection to {} failed (attempt {}), entering backoff", host_key, count);
         return Err(format!("SSH connection failed (check key auth): {}", stderr));
     }
-    ssh_backoff_reset();
+    ssh_backoff_reset(&host_key);
     Ok(())
 }
 
@@ -359,7 +376,7 @@ async fn ssh_exec(ssh_host: &str, ssh_user: &str, cmd: &str) -> Result<String, S
 async fn close_ssh_master(ssh_host: &str, ssh_user: &str) -> Result<(), String> {
     let control_path = format!("/tmp/oc-claw-ssh-{}@{}:22", ssh_user, ssh_host);
     if !std::path::Path::new(&control_path).exists() {
-        ssh_backoff_reset();
+        ssh_backoff_reset(&format!("{}@{}", ssh_user, ssh_host));
         return Ok(());
     }
     let target = format!("{}@{}", ssh_user, ssh_host);
@@ -371,7 +388,7 @@ async fn close_ssh_master(ssh_host: &str, ssh_user: &str) -> Result<(), String> 
         .output()
         .await;
     let _ = tokio::fs::remove_file(&control_path).await;
-    ssh_backoff_reset();
+    ssh_backoff_reset(&format!("{}@{}", ssh_user, ssh_host));
     log::info!("[close_ssh_master] closed socket for {}@{}", ssh_user, ssh_host);
     Ok(())
 }
@@ -390,7 +407,8 @@ async fn close_ssh(ssh_host: Option<String>, ssh_user: Option<String>) -> Result
                 }
             }
         }
-        ssh_backoff_reset();
+        // Clear all backoff entries
+        ssh_backoff_map().lock().unwrap().clear();
         return Ok(());
     }
     close_ssh_master(&sh, &su).await
@@ -2995,8 +3013,6 @@ async fn play_sound(name: String) -> Result<(), String> {
 }
 
 // ─── Claude Code session state ───
-use std::sync::Arc;
-use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ClaudeSession {

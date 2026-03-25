@@ -9,9 +9,9 @@ import { SettingsTab } from './components/SettingsTab'
 import { AgentDetailView } from './components/AgentDetailView'
 import { CreateCharacterModal } from './components/CreateCharacterModal'
 import { ClaudeStatsView } from './components/ClaudeStatsView'
-import { getStore, DEFAULT_CHAR, DEFAULT_CHAR_NAME, loadCharacters } from './lib/store'
+import { getStore, DEFAULT_CHAR, DEFAULT_CHAR_NAME, loadCharacters, loadOcConnections } from './lib/store'
 import { saveAgentCharMap } from './lib/agents'
-import type { AgentMetrics } from './lib/types'
+import type { AgentMetrics, OcConnection } from './lib/types'
 
 interface CharacterMeta {
   name: string
@@ -217,7 +217,7 @@ function getMiniGif(char: CharacterMeta | undefined, petState: PetState | boolea
   return idleGifs[0] || allGifs[0]
 }
 
-function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, onToggle, onOpenCreate, onDeleteChar }: {
+function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, onToggle, onOpenCreate, onDeleteChar, sourceLabel }: {
   agent: AgentInfo
   characters: CharacterMeta[]
   currentChar: string
@@ -226,6 +226,7 @@ function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, 
   onToggle: () => void
   onOpenCreate?: () => void
   onDeleteChar?: (name: string) => void
+  sourceLabel?: string
 }) {
   const [isEditing, setIsEditing] = useState(false)
   const charsWithMini = characters.filter((c) => c.miniActions && Object.keys(c.miniActions).length > 0)
@@ -257,6 +258,7 @@ function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, 
             <div className="flex items-center gap-2">
               <span className="text-base font-medium text-white/90">{agent.identityName || agent.id}</span>
               {agent.identityEmoji && <span className="text-sm">{agent.identityEmoji}</span>}
+              {sourceLabel && <span className="text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded">{sourceLabel}</span>}
             </div>
           </div>
         </div>
@@ -387,13 +389,13 @@ function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, 
   )
 }
 
-async function getOcParams(): Promise<{ mode?: string; url?: string; token?: string; sshHost?: string; sshUser?: string }> {
-  const store = await load('settings.json', { defaults: {}, autoSave: true })
-  const mode = ((await store.get('oc_mode')) as string) || 'local'
-  if (mode !== 'remote') return {}
-  const sshHost = ((await store.get('ssh_host')) as string) || ''
-  const sshUser = ((await store.get('ssh_user')) as string) || ''
-  return { mode, ...(sshHost && sshUser ? { sshHost, sshUser } : {}) }
+type OcParams = { mode?: string; url?: string; token?: string; sshHost?: string; sshUser?: string }
+
+function connToOcParams(conn: OcConnection): OcParams {
+  if (conn.type === 'remote' && conn.host && conn.user) {
+    return { mode: 'remote', sshHost: conn.host, sshUser: conn.user }
+  }
+  return {}
 }
 
 export default function Mini() {
@@ -425,8 +427,12 @@ export default function Mini() {
   const [claudeConversation, setClaudeConversation] = useState<any[]>([])
   const [showClaudeStats, setShowClaudeStats] = useState(false)
 
+  // OC multi-connection: qualifiedId → connection params, qualifiedId → real agent ID, qualifiedId → source label
+  const agentConnMapRef = useRef<Map<string, OcParams>>(new Map())
+  const agentRealIdMapRef = useRef<Map<string, string>>(new Map())
+  const [agentSourceLabels, setAgentSourceLabels] = useState<Record<string, string>>({})
+
   // Feature toggles
-  const [enableOpenClaw, setEnableOpenClaw] = useState(true)
   const [enableClaudeCode, setEnableClaudeCode] = useState(true)
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [notifySound, setNotifySound] = useState<'default' | 'manbo'>('default')
@@ -493,22 +499,48 @@ export default function Mini() {
     } catch (e) { console.warn('[fetchAgents] loadCharacters failed:', e) }
     try {
       const store = await load('settings.json', { defaults: {}, autoSave: true })
-      const oc = await getOcParams()
-      const [agentList, charMap] = await Promise.all([
-        invoke('get_agents', oc) as Promise<AgentInfo[]>,
-        store.get('agent_char_map') as Promise<Record<string, string> | null>,
-      ])
-      setAgents(agentList)
+      const connections = await loadOcConnections()
+      const newConnMap = new Map<string, OcParams>()
+      const newRealIdMap = new Map<string, string>()
+      const newSourceLabels: Record<string, string> = {}
+      const allAgents: AgentInfo[] = []
+      const multi = connections.length > 1
+      await Promise.all(connections.map(async (conn) => {
+        try {
+          const oc = connToOcParams(conn)
+          const agents = (await invoke('get_agents', oc)) as AgentInfo[]
+          const prefix = multi ? `${conn.id.slice(0, 8)}:` : ''
+          const label = conn.type === 'local' ? '本地' : (conn.host || '远程')
+          for (const a of agents) {
+            const qualifiedId = prefix + a.id
+            newConnMap.set(qualifiedId, oc)
+            newRealIdMap.set(qualifiedId, a.id)
+            if (multi) newSourceLabels[qualifiedId] = label
+            allAgents.push({ ...a, id: qualifiedId })
+          }
+        } catch (e) { console.warn('[fetchAgents] connection failed:', conn.id, e) }
+      }))
+      agentConnMapRef.current = newConnMap
+      agentRealIdMapRef.current = newRealIdMap
+      setAgentSourceLabels(newSourceLabels)
+      const charMap = (await store.get('agent_char_map')) as Record<string, string> | null
+      setAgents(allAgents)
       setAgentCharMap(charMap || {})
     } catch (e) { console.warn('[fetchAgents] get_agents failed:', e) }
   }, [])
 
   const pollHealth = useCallback(async () => {
     try {
-      const oc = await getOcParams()
-      const health = (await invoke('get_health', oc)) as { agents: AgentHealth[] }
+      const connections = await loadOcConnections()
       const hMap: Record<string, boolean> = {}
-      health.agents.forEach((a) => { hMap[a.agentId] = a.active })
+      await Promise.all(connections.map(async (conn) => {
+        try {
+          const oc = connToOcParams(conn)
+          const prefix = connections.length > 1 ? `${conn.id.slice(0, 8)}:` : ''
+          const health = (await invoke('get_health', oc)) as { agents: AgentHealth[] }
+          health.agents.forEach((a) => { hMap[prefix + a.agentId] = a.active })
+        } catch { /* ignore */ }
+      }))
       setHealthMap(hMap)
     } catch { /* ignore */ }
   }, [])
@@ -518,19 +550,22 @@ export default function Mini() {
   const previewQueueRef = useRef<string[]>([])
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sessionFileMapRef = useRef<Map<string, string>>(new Map())
+  const sessionAgentMapRef = useRef<Map<string, string>>(new Map()) // sessionCompositeKey → qualifiedAgentId
   const fetchingSessionsRef = useRef(false)
 
   const fetchAllSessions = useCallback(async () => {
     if (agents.length === 0) { setAllSessions([]); return }
     if (fetchingSessionsRef.current) return
     fetchingSessionsRef.current = true
-    const oc = await getOcParams()
     const results: MiniSessionInfo[] = []
     await Promise.all(
       agents.map(async (agent) => {
         try {
-          const s = (await invoke('get_agent_sessions', { agentId: agent.id, ...oc })) as MiniSessionInfo[]
-          results.push(...s)
+          const oc = agentConnMapRef.current.get(agent.id) || {}
+          const realId = agentRealIdMapRef.current.get(agent.id) || agent.id
+          const s = (await invoke('get_agent_sessions', { agentId: realId, ...oc })) as MiniSessionInfo[]
+          // Tag sessions with the qualified agent ID
+          results.push(...s.map(ss => ({ ...ss, agentId: agent.id })))
         } catch { /* ignore */ }
       })
     )
@@ -571,6 +606,7 @@ export default function Mini() {
     for (const s of top) {
       const k = `${s.agentId}:${s.key}`
       if (s.sessionFile) sessionFileMapRef.current.set(k, s.sessionFile)
+      sessionAgentMapRef.current.set(k, s.agentId)
       const cached = previewCacheRef.current.get(k)
       const stale = !cached || (Date.now() - cached.fetchedAt > 15000)
       if (stale) queue.push(k)
@@ -595,14 +631,33 @@ export default function Mini() {
 
   const pollActiveStatus = useCallback(async () => {
     try {
-      const oc = await getOcParams()
-      // Skip heavy SSH polling in remote mode — active status comes from session previews
-      if (oc.mode === 'remote') {
+      const connections = await loadOcConnections()
+      const hasRemote = connections.some(c => c.type === 'remote')
+      // If all connections are remote, skip heavy polling — active status comes from session previews
+      if (hasRemote && connections.every(c => c.type === 'remote')) {
         const anyActive = Array.from(previewCacheRef.current.values()).some(c => c.active)
         setAnySessionActive(anyActive)
         return
       }
-      const activeKeys = (await invoke('get_active_sessions', oc)) as string[]
+      // Poll local connections for active sessions
+      const allActiveKeys: string[] = []
+      for (const conn of connections) {
+        if (conn.type === 'remote') continue
+        try {
+          const oc = connToOcParams(conn)
+          const keys = (await invoke('get_active_sessions', oc)) as string[]
+          // Prefix keys with qualified agent ID prefix if multi-connection
+          const prefix = connections.length > 1 ? `${conn.id.slice(0, 8)}:` : ''
+          allActiveKeys.push(...keys.map(k => prefix + k))
+        } catch { /* ignore */ }
+      }
+      // Also check remote preview cache
+      if (hasRemote) {
+        for (const [k, c] of previewCacheRef.current.entries()) {
+          if (c.active) allActiveKeys.push(k)
+        }
+      }
+      const activeKeys = allActiveKeys
       setAnySessionActive(activeKeys.length > 0)
       const activeSet = new Set(activeKeys)
       const prevSet = prevActiveKeysRef.current
@@ -640,8 +695,6 @@ export default function Mini() {
     if (previewTimerRef.current) { clearTimeout(previewTimerRef.current); previewTimerRef.current = null }
     const queue = [...previewQueueRef.current]
     if (queue.length === 0) return
-    const oc = await getOcParams()
-
     const processNext = (idx: number) => {
       if (idx >= queue.length) return
       const k = queue[idx]
@@ -651,6 +704,8 @@ export default function Mini() {
         previewTimerRef.current = setTimeout(() => processNext(idx + 1), 200)
         return
       }
+      const agentId = sessionAgentMapRef.current.get(k) || k.split(':')[0]
+      const oc = agentConnMapRef.current.get(agentId) || {}
       invoke('get_session_preview', { sessionFile, ...oc })
         .then((preview) => {
           const p = preview as SessionPreview
@@ -695,8 +750,6 @@ export default function Mini() {
   useEffect(() => {
     (async () => {
       const store = await load('settings.json', { defaults: {}, autoSave: true })
-      const oc = await store.get('enable_openclaw')
-      if (typeof oc === 'boolean') setEnableOpenClaw(oc)
       const cc = await store.get('enable_claudecode')
       if (typeof cc === 'boolean') setEnableClaudeCode(cc)
       if (cc !== false) invoke('install_claude_hooks').catch(() => {})
@@ -756,8 +809,9 @@ export default function Mini() {
     let cancelled = false
     const fetchMsgs = async () => {
       try {
-        const oc = await getOcParams()
-        const msgs = await invoke('get_session_messages', { agentId: selectedSessionKey.agentId, sessionKey: selectedSessionKey.key, ...oc }) as any[]
+        const oc = agentConnMapRef.current.get(selectedSessionKey.agentId) || {}
+        const realId = agentRealIdMapRef.current.get(selectedSessionKey.agentId) || selectedSessionKey.agentId
+        const msgs = await invoke('get_session_messages', { agentId: realId, sessionKey: selectedSessionKey.key, ...oc }) as any[]
         if (!cancelled) setSessionMessages(msgs)
       } catch { if (!cancelled) setSessionMessages([]) }
     }
@@ -785,17 +839,18 @@ export default function Mini() {
   useEffect(() => {
     if (!selectedAgentId) { setMetrics(null); setExtraInfo(null); return }
     let cancelled = false
+    const realId = agentRealIdMapRef.current.get(selectedAgentId) || selectedAgentId
     const fetchMetrics = async () => {
       try {
-        const oc = await getOcParams()
-        const m = (await invoke('get_agent_metrics', { agentId: selectedAgentId, ...oc })) as AgentMetrics
+        const oc = agentConnMapRef.current.get(selectedAgentId) || {}
+        const m = (await invoke('get_agent_metrics', { agentId: realId, ...oc })) as AgentMetrics
         if (!cancelled) setMetrics(m)
       } catch { if (!cancelled) setMetrics(null) }
     }
     const fetchExtra = async () => {
-      const oc = await getOcParams()
+      const oc = agentConnMapRef.current.get(selectedAgentId) || {}
       try {
-        const e = (await invoke('get_agent_extra_info', { agentId: selectedAgentId, ...oc })) as any
+        const e = (await invoke('get_agent_extra_info', { agentId: realId, ...oc })) as any
         if (!cancelled) setExtraInfo(e)
       } catch { if (!cancelled) setExtraInfo(null) }
     }
@@ -1343,14 +1398,11 @@ export default function Mini() {
                         </div>
 
                         {/* OpenClaw Agents */}
-                        {enableOpenClaw && (
+                        {agents.length > 0 && (
                           <div className="mb-8">
                             <h2 className="text-xs font-bold text-white/30 uppercase tracking-widest mb-3 px-4">OpenClaw Agents</h2>
                             <div className="bg-[#0f0f0f] rounded-2xl border border-white/5 shadow-2xl overflow-hidden">
-                              {agents.length === 0 ? (
-                                <div className="text-center text-white/40 py-8 text-sm">等待 agent 上线...</div>
-                              ) : (
-                                agents.map((agent) => (
+                              {agents.map((agent) => (
                                   <AgentAccordionItem
                                     key={agent.id}
                                     agent={agent}
@@ -1358,6 +1410,7 @@ export default function Mini() {
                                     currentChar={agentCharMap[agent.id] || DEFAULT_CHAR_NAME}
                                     isOpen={openAccordionId === agent.id}
                                     onToggle={() => setOpenAccordionId(openAccordionId === agent.id ? null : agent.id)}
+                                    sourceLabel={agentSourceLabels[agent.id]}
                                     onOpenCreate={() => setIsCreateModalOpen(true)}
                                     onDeleteChar={handleDeleteChar}
                                     onSelect={async (charName) => {
@@ -1366,8 +1419,7 @@ export default function Mini() {
                                       await saveAgentCharMap(updated)
                                     }}
                                   />
-                                ))
-                              )}
+                                ))}
                             </div>
                           </div>
                         )}

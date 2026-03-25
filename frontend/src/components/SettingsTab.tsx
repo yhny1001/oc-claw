@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { Loader2, Check, ChevronDown, Copy } from 'lucide-react'
+import { Loader2, Check, ChevronDown, Copy, Plus, Trash2 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { getStore } from '../lib/store'
+import { getStore, loadOcConnections, saveOcConnections } from '../lib/store'
+import type { OcConnection } from '../lib/types'
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -34,52 +35,19 @@ function CopyCode({ text }: { text: string }) {
   )
 }
 
-export function SettingsTab({ disableSleepAnim, onToggleSleepAnim, notifySound, onChangeNotifySound, waitingSound, onToggleWaitingSound, mascotPosition, onChangeMascotPosition }: { disableSleepAnim: boolean; onToggleSleepAnim: (v: boolean) => void; notifySound: 'default' | 'manbo'; onChangeNotifySound: (v: 'default' | 'manbo') => void; waitingSound: boolean; onToggleWaitingSound: (v: boolean) => void; mascotPosition: 'left' | 'right'; onChangeMascotPosition: (v: 'left' | 'right') => void }) {
-  const [ocMode, setOcMode] = useState<'local' | 'remote'>('local')
-  const [sshHost, setSshHost] = useState('')
-  const [sshUser, setSshUser] = useState('')
-  const [enableOpenClaw, setEnableOpenClaw] = useState(true)
-  const [enableClaudeCode, setEnableClaudeCode] = useState(true)
-  const [hookStatus, setHookStatus] = useState('')
-  const [showGuide, setShowGuide] = useState(false)
-  const [isTesting, setIsTesting] = useState(false)
+function ConnectionRow({ conn, onUpdate, onDelete }: { conn: OcConnection; onUpdate: (c: OcConnection) => void; onDelete: () => void }) {
+  const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'success' | 'error' | null>(null)
   const [testMsg, setTestMsg] = useState('')
-  const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string; hasUpdate: boolean; url: string } | null>(null)
-  const [updateChecking, setUpdateChecking] = useState(false)
-  const [updating, setUpdating] = useState(false)
-
-  useEffect(() => {
-    ;(async () => {
-      const store = await getStore()
-      const m = (await store.get('oc_mode')) as string
-      if (m === 'remote') setOcMode('remote')
-      setSshHost(((await store.get('ssh_host')) as string) || '')
-      setSshUser(((await store.get('ssh_user')) as string) || '')
-      const oc = await store.get('enable_openclaw')
-      if (typeof oc === 'boolean') setEnableOpenClaw(oc)
-      const cc = await store.get('enable_claudecode')
-      if (typeof cc === 'boolean') setEnableClaudeCode(cc)
-    })()
-    invoke('check_for_update').then((info: any) => setUpdateInfo(info)).catch(() => {})
-  }, [])
-
-  const saveSettings = async () => {
-    const store = await getStore()
-    await store.set('oc_mode', ocMode)
-    await store.set('ssh_host', sshHost)
-    await store.set('ssh_user', sshUser)
-    await store.save()
-  }
+  const [showGuide, setShowGuide] = useState(false)
 
   const testConnection = async () => {
-    setIsTesting(true)
+    setTesting(true)
     setTestResult(null)
     setTestMsg('')
     try {
-      await saveSettings()
-      if (ocMode === 'remote') {
-        const result: any = await invoke('get_agents', { mode: 'remote', sshHost, sshUser })
+      if (conn.type === 'remote') {
+        const result: any = await invoke('get_agents', { mode: 'remote', sshHost: conn.host, sshUser: conn.user })
         setTestMsg(`${result.length} 个 agent`)
       } else {
         const store = await getStore()
@@ -93,14 +61,156 @@ export function SettingsTab({ disableSleepAnim, onToggleSleepAnim, notifySound, 
       setTestResult('error')
       setTestMsg(String(e))
     }
-    setIsTesting(false)
+    setTesting(false)
   }
 
-  const toggleOpenClaw = async (val: boolean) => {
-    setEnableOpenClaw(val)
-    const store = await getStore()
-    await store.set('enable_openclaw', val)
-    await store.save()
+  return (
+    <div className="p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex bg-black/50 p-0.5 rounded-lg border border-white/5">
+            {(['local', 'remote'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => onUpdate({ ...conn, type: t })}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${conn.type === t ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/60'}`}
+              >
+                {t === 'local' ? '本地' : '远程'}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-white/30">
+            {conn.type === 'local' ? '~/.openclaw' : conn.host ? `${conn.user || 'root'}@${conn.host}` : '未配置'}
+          </span>
+        </div>
+        <button onClick={onDelete} className="p-1.5 text-white/20 hover:text-red-400 transition-colors rounded-lg hover:bg-red-500/10">
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <AnimatePresence>
+        {conn.type === 'remote' && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="flex flex-col gap-3 overflow-hidden"
+          >
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={conn.user || ''}
+                onChange={(e) => onUpdate({ ...conn, user: e.target.value })}
+                placeholder="用户名"
+                className="w-24 bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/30 transition-colors"
+              />
+              <span className="self-center text-white/30 text-sm">@</span>
+              <input
+                type="text"
+                value={conn.host || ''}
+                onChange={(e) => onUpdate({ ...conn, host: e.target.value })}
+                placeholder="服务器地址"
+                className="flex-1 bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/30 transition-colors"
+              />
+            </div>
+            <button
+              onClick={() => setShowGuide(!showGuide)}
+              className="flex items-center gap-1 text-xs text-white/40 hover:text-white/60 transition-colors w-fit"
+            >
+              <ChevronDown className={`w-3 h-3 transition-transform ${showGuide ? 'rotate-0' : '-rotate-90'}`} />
+              如何连接远程服务器？
+            </button>
+            <AnimatePresence>
+              {showGuide && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div className="bg-white/[0.03] border border-white/5 rounded-lg p-3 flex flex-col gap-2 text-xs text-white/50 leading-relaxed">
+                    <p className="text-white/70 font-medium">前置条件</p>
+                    <p>远程服务器需安装 OpenClaw 并运行 Gateway</p>
+                    <p className="text-white/70 font-medium pt-1">步骤</p>
+                    <p>1. 生成本地 SSH 密钥（如果没有）</p>
+                    <CopyCode text="ssh-keygen -t ed25519" />
+                    <p>2. 将公钥复制到远程服务器</p>
+                    <CopyCode text="ssh-copy-id -i ~/.ssh/id_ed25519.pub 用户名@xx.xx.xx.xx" />
+                    <p>3. 验证免密登录</p>
+                    <CopyCode text={`ssh 用户名@xx.xx.xx.xx "echo ok"`} />
+                    <p>4. 填入用户名和服务器地址，点击「测试」</p>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={testConnection}
+          disabled={testing || (conn.type === 'remote' && (!conn.host || !conn.user))}
+          className="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-medium text-white transition-colors flex items-center gap-1.5 disabled:opacity-50"
+        >
+          {testing && <Loader2 className="w-3 h-3 animate-spin" />}
+          测试
+        </button>
+        {testResult === 'success' && (
+          <span className="text-xs text-emerald-400 flex items-center gap-1">
+            <Check className="w-3 h-3" /> 成功 {testMsg && `· ${testMsg}`}
+          </span>
+        )}
+        {testResult === 'error' && (
+          <span className="text-xs text-red-400 truncate max-w-[200px]" title={testMsg}>
+            失败: {testMsg}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function SettingsTab({ disableSleepAnim, onToggleSleepAnim, notifySound, onChangeNotifySound, waitingSound, onToggleWaitingSound, mascotPosition, onChangeMascotPosition }: { disableSleepAnim: boolean; onToggleSleepAnim: (v: boolean) => void; notifySound: 'default' | 'manbo'; onChangeNotifySound: (v: 'default' | 'manbo') => void; waitingSound: boolean; onToggleWaitingSound: (v: boolean) => void; mascotPosition: 'left' | 'right'; onChangeMascotPosition: (v: 'left' | 'right') => void }) {
+  const [connections, setConnections] = useState<OcConnection[]>([])
+  const [enableClaudeCode, setEnableClaudeCode] = useState(true)
+  const [hookStatus, setHookStatus] = useState('')
+  const [updateInfo, setUpdateInfo] = useState<{ current: string; latest: string; hasUpdate: boolean; url: string } | null>(null)
+  const [updateChecking, setUpdateChecking] = useState(false)
+  const [updating, setUpdating] = useState(false)
+
+  useEffect(() => {
+    ;(async () => {
+      const conns = await loadOcConnections()
+      setConnections(conns)
+      const store = await getStore()
+      const cc = await store.get('enable_claudecode')
+      if (typeof cc === 'boolean') setEnableClaudeCode(cc)
+    })()
+    invoke('check_for_update').then((info: any) => setUpdateInfo(info)).catch(() => {})
+  }, [])
+
+  const updateConnection = (idx: number, conn: OcConnection) => {
+    const updated = [...connections]
+    updated[idx] = conn
+    setConnections(updated)
+    saveOcConnections(updated)
+  }
+
+  const deleteConnection = (idx: number) => {
+    const conn = connections[idx]
+    if (conn.type === 'remote' && conn.host && conn.user) {
+      invoke('close_ssh', { sshHost: conn.host, sshUser: conn.user }).catch(() => {})
+    }
+    const updated = connections.filter((_, i) => i !== idx)
+    setConnections(updated)
+    saveOcConnections(updated)
+  }
+
+  const addConnection = () => {
+    const updated = [...connections, { id: crypto.randomUUID(), type: 'local' as const }]
+    setConnections(updated)
+    saveOcConnections(updated)
   }
 
   const toggleClaudeCode = async (val: boolean) => {
@@ -120,138 +230,46 @@ export function SettingsTab({ disableSleepAnim, onToggleSleepAnim, notifySound, 
 
   return (
     <div className="max-w-2xl mx-auto pt-10 pb-20 px-6 flex flex-col gap-10">
-      {/* Agent 来源 */}
+      {/* OpenClaw 连接 */}
       <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-medium text-white">Agent 来源</h2>
-        <div className="bg-[#0f0f0f] border border-white/5 rounded-2xl overflow-hidden">
-          <div className="flex items-center justify-between p-4 border-b border-white/5">
-            <div className="flex flex-col gap-1">
-              <span className="text-sm font-medium text-white/90">OpenClaw</span>
-              <span className="text-xs text-white/40">连接 OpenClaw Gateway 获取 agent 状态</span>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-medium text-white">OpenClaw 连接</h2>
+          <button
+            onClick={addConnection}
+            className="flex items-center gap-1 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-medium text-white transition-colors"
+          >
+            <Plus className="w-3 h-3" /> 添加
+          </button>
+        </div>
+        <div className="bg-[#0f0f0f] border border-white/5 rounded-2xl overflow-hidden divide-y divide-white/5">
+          {connections.length === 0 ? (
+            <div className="text-center text-white/30 py-8 text-sm">
+              暂无连接，点击「添加」来连接 OpenClaw 实例
             </div>
-            <Toggle checked={enableOpenClaw} onChange={toggleOpenClaw} />
-          </div>
+          ) : (
+            connections.map((conn, idx) => (
+              <ConnectionRow
+                key={conn.id}
+                conn={conn}
+                onUpdate={(c) => updateConnection(idx, c)}
+                onDelete={() => deleteConnection(idx)}
+              />
+            ))
+          )}
+        </div>
+      </section>
+
+      {/* Claude Code */}
+      <section className="flex flex-col gap-4">
+        <h2 className="text-lg font-medium text-white">Claude Code</h2>
+        <div className="bg-[#0f0f0f] border border-white/5 rounded-2xl overflow-hidden">
           <div className="flex items-center justify-between p-4">
             <div className="flex flex-col gap-1">
-              <span className="text-sm font-medium text-white/90">Claude Code</span>
+              <span className="text-sm font-medium text-white/90">启用 Claude Code</span>
               <span className="text-xs text-white/40">通过 Hook 监听本地 Claude Code 会话</span>
               {hookStatus && <span className="text-xs text-white/30 mt-1">{hookStatus}</span>}
             </div>
             <Toggle checked={enableClaudeCode} onChange={toggleClaudeCode} />
-          </div>
-        </div>
-      </section>
-
-      {/* OpenClaw 连接 */}
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-medium text-white">OpenClaw 连接</h2>
-        <div className="bg-[#0f0f0f] border border-white/5 rounded-2xl p-5 flex flex-col gap-6">
-          <div className="flex flex-col gap-3">
-            <span className="text-sm font-medium text-white/80">连接模式</span>
-            <div className="flex bg-black/50 p-1 rounded-lg border border-white/5 w-fit">
-              <button
-                onClick={async () => { setOcMode('local'); setTestResult(null); const store = await getStore(); await store.set('oc_mode', 'local'); await store.save(); invoke('close_ssh', {}).catch(() => {}) }}
-                className={`px-6 py-1.5 text-sm font-medium rounded-md transition-colors ${ocMode === 'local' ? 'bg-white/10 text-white shadow-sm' : 'text-white/50 hover:text-white/80'}`}
-              >
-                本地
-              </button>
-              <button
-                onClick={async () => { setOcMode('remote'); setTestResult(null); const store = await getStore(); await store.set('oc_mode', 'remote'); await store.save() }}
-                className={`px-6 py-1.5 text-sm font-medium rounded-md transition-colors ${ocMode === 'remote' ? 'bg-white/10 text-white shadow-sm' : 'text-white/50 hover:text-white/80'}`}
-              >
-                远程
-              </button>
-            </div>
-            <p className="text-xs text-white/40">
-              {ocMode === 'local'
-                ? '读取本机 ~/.openclaw 目录，需要本地安装 OpenClaw'
-                : '通过 SSH 连接远程服务器，读取 OpenClaw 数据'}
-            </p>
-
-            <AnimatePresence>
-              {ocMode === 'remote' && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className="flex flex-col gap-4 overflow-hidden"
-                >
-                  <div className="flex flex-col gap-2 pt-2">
-                    <label className="text-sm text-white/80 font-medium">SSH 连接</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={sshUser}
-                        onChange={(e) => setSshUser(e.target.value)}
-                        onBlur={saveSettings}
-                        placeholder="用户名，如 root"
-                        className="w-28 bg-black/50 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/30 transition-colors"
-                      />
-                      <span className="self-center text-white/30 text-sm">@</span>
-                      <input
-                        type="text"
-                        value={sshHost}
-                        onChange={(e) => setSshHost(e.target.value)}
-                        onBlur={saveSettings}
-                        placeholder="服务器地址，如 xx.xx.xx.xx"
-                        className="flex-1 bg-black/50 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/30 transition-colors"
-                      />
-                    </div>
-                    <button
-                      onClick={() => setShowGuide(!showGuide)}
-                      className="flex items-center gap-1 text-xs text-white/40 hover:text-white/60 transition-colors w-fit"
-                    >
-                      <ChevronDown className={`w-3 h-3 transition-transform ${showGuide ? 'rotate-0' : '-rotate-90'}`} />
-                      如何连接远程服务器？
-                    </button>
-                    <AnimatePresence>
-                      {showGuide && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          className="overflow-hidden"
-                        >
-                          <div className="bg-white/[0.03] border border-white/5 rounded-lg p-3 flex flex-col gap-2 text-xs text-white/50 leading-relaxed">
-                            <p className="text-white/70 font-medium">前置条件</p>
-                            <p>远程服务器需安装 OpenClaw 并运行 Gateway</p>
-                            <p className="text-white/70 font-medium pt-1">步骤</p>
-                            <p>1. 生成本地 SSH 密钥（如果没有）</p>
-                            <CopyCode text="ssh-keygen -t ed25519" />
-                            <p>2. 将公钥复制到远程服务器</p>
-                            <CopyCode text="ssh-copy-id -i ~/.ssh/id_ed25519.pub 用户名@xx.xx.xx.xx" />
-                            <p>3. 验证免密登录</p>
-                            <CopyCode text={`ssh 用户名@xx.xx.xx.xx "echo ok"`} />
-                            <p>4. 在上方填入用户名和服务器地址，点击「测试连接」</p>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
-          <div className="flex items-center gap-3 pt-2 border-t border-white/5">
-            <button
-              onClick={testConnection}
-              disabled={isTesting}
-              className="px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-sm font-medium text-white transition-colors flex items-center gap-2 disabled:opacity-50"
-            >
-              {isTesting && <Loader2 className="w-4 h-4 animate-spin" />}
-              测试连接
-            </button>
-            {testResult === 'success' && (
-              <span className="text-sm text-emerald-400 flex items-center gap-1 ml-2">
-                <Check className="w-4 h-4" /> 连接成功 {testMsg && `· ${testMsg}`}
-              </span>
-            )}
-            {testResult === 'error' && (
-              <span className="text-sm text-red-400 ml-2">
-                失败: {testMsg}
-              </span>
-            )}
           </div>
         </div>
       </section>

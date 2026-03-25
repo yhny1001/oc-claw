@@ -79,6 +79,13 @@ export interface PipelineConfig {
   presets: PipelinePreset[]; exportMode: 'whole' | 'by-row'; discardLastFrame: boolean
 }
 
+export interface OcConnection {
+  id: string
+  type: 'local' | 'remote'
+  host?: string
+  user?: string
+}
+
 export type CardStatus = 'idle' | 'generating' | 'processing' | 'ready' | 'error'
 
 export interface PipelineItem {

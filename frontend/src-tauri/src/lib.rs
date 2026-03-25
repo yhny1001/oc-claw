@@ -103,10 +103,18 @@ pub struct AgentInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SessionHealth {
+    pub key: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentHealth {
     #[serde(rename = "agentId")]
     pub agent_id: String,
     pub active: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<SessionHealth>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -262,6 +270,45 @@ fn check_agent_active_from_lines(lines: &[String]) -> bool {
         }
     }
     last_role == "user" || (last_role == "assistant" && !has_usage)
+}
+
+/// Build AgentHealth with session-level data from sessions.json + tail outputs.
+fn build_agent_health_from_meta(
+    agent_id: &str,
+    meta_json: &str,
+    tails: &std::collections::HashMap<String, Vec<String>>,
+) -> AgentHealth {
+    let mut sessions = Vec::new();
+    let mut any_active = false;
+
+    if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(meta_json) {
+        for (key, val) in map.iter() {
+            let sf = val["sessionFile"].as_str().unwrap_or("");
+            if sf.is_empty() { continue; }
+            // Match session file path to tail output by basename
+            let basename = sf.rsplit('/').next().unwrap_or("");
+            let active = if let Some(lines) = tails.get(basename) {
+                check_agent_active_from_lines(lines)
+            } else {
+                false
+            };
+            if active { any_active = true; }
+            sessions.push(SessionHealth { key: key.clone(), active });
+        }
+    }
+
+    // Fallback: no sessions.json or parse failed — check all tails directly (v1.3.3 behavior)
+    if sessions.is_empty() && !tails.is_empty() {
+        for (fname, lines) in tails {
+            let active = check_agent_active_from_lines(lines);
+            if active { any_active = true; }
+            // Use filename (without .jsonl) as session key
+            let key = fname.strip_suffix(".jsonl").unwrap_or(fname).to_string();
+            sessions.push(SessionHealth { key, active });
+        }
+    }
+
+    AgentHealth { agent_id: agent_id.to_string(), active: any_active, sessions }
 }
 
 /// Ensure an SSH ControlMaster socket is established (called once, reused by all ssh_exec).
@@ -902,33 +949,69 @@ async fn get_health(mode: Option<String>, url: Option<String>, token: Option<Str
         let sh = ssh_host.as_deref().unwrap_or("");
         let su = ssh_user.as_deref().unwrap_or("");
         if !sh.is_empty() && !su.is_empty() {
-            // Single SSH command: list agents and check each one's latest session tail
-            let cmd = r#"for d in $HOME/.openclaw/agents/*/; do id=$(basename "$d"); f=$(ls -t "$d"sessions/*.jsonl 2>/dev/null | head -1); echo "AGENT:$id"; [ -f "$f" ] && tail -5 "$f"; echo "END_AGENT"; done"#;
+            // Single SSH command: read sessions.json + tail each session file per agent
+            let cmd = r#"for d in $HOME/.openclaw/agents/*/; do id=$(basename "$d"); sj="$d/sessions/sessions.json"; echo "AGENT:$id"; if [ -f "$sj" ]; then echo "META_START"; cat "$sj"; echo ""; echo "META_END"; fi; for f in "$d"sessions/*.jsonl; do [ -f "$f" ] || continue; echo "TAIL:$(basename "$f")"; tail -5 "$f"; echo "END_TAIL"; done; echo "END_AGENT"; done"#;
             let output = ssh_exec(sh, su, cmd).await.unwrap_or_default();
+
             let mut agents = Vec::new();
             let mut current_id: Option<String> = None;
-            let mut lines_buf: Vec<String> = Vec::new();
+            let mut meta_buf = String::new();
+            let mut in_meta = false;
+            // filename → tail lines
+            let mut tails: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+            let mut current_tail_file: Option<String> = None;
+            let mut tail_lines: Vec<String> = Vec::new();
+
             for line in output.lines() {
                 if let Some(id) = line.strip_prefix("AGENT:") {
+                    // Finalize previous agent
                     if let Some(prev_id) = current_id.take() {
-                        let active = check_agent_active_from_lines(&lines_buf);
-                        agents.push(AgentHealth { agent_id: prev_id, active });
+                        let agent = build_agent_health_from_meta(&prev_id, &meta_buf, &tails);
+                        agents.push(agent);
                     }
                     current_id = Some(id.to_string());
-                    lines_buf.clear();
-                } else if line == "END_AGENT" {
-                    if let Some(prev_id) = current_id.take() {
-                        let active = check_agent_active_from_lines(&lines_buf);
-                        agents.push(AgentHealth { agent_id: prev_id, active });
+                    meta_buf.clear();
+                    tails.clear();
+                    in_meta = false;
+                } else if line == "META_START" {
+                    in_meta = true;
+                    meta_buf.clear();
+                } else if line == "META_END" {
+                    in_meta = false;
+                } else if in_meta {
+                    meta_buf.push_str(line);
+                    meta_buf.push('\n');
+                } else if let Some(fname) = line.strip_prefix("TAIL:") {
+                    if let Some(prev_file) = current_tail_file.take() {
+                        tails.insert(prev_file, std::mem::take(&mut tail_lines));
                     }
-                    lines_buf.clear();
-                } else {
-                    lines_buf.push(line.to_string());
+                    current_tail_file = Some(fname.to_string());
+                    tail_lines.clear();
+                } else if line == "END_TAIL" {
+                    if let Some(prev_file) = current_tail_file.take() {
+                        tails.insert(prev_file, std::mem::take(&mut tail_lines));
+                    }
+                } else if line == "END_AGENT" {
+                    if let Some(prev_file) = current_tail_file.take() {
+                        tails.insert(prev_file, std::mem::take(&mut tail_lines));
+                    }
+                    if let Some(prev_id) = current_id.take() {
+                        let agent = build_agent_health_from_meta(&prev_id, &meta_buf, &tails);
+                        agents.push(agent);
+                    }
+                    meta_buf.clear();
+                    tails.clear();
+                } else if current_tail_file.is_some() {
+                    tail_lines.push(line.to_string());
                 }
             }
+            // Handle last agent if no END_AGENT
+            if let Some(prev_file) = current_tail_file.take() {
+                tails.insert(prev_file, tail_lines);
+            }
             if let Some(prev_id) = current_id {
-                let active = check_agent_active_from_lines(&lines_buf);
-                agents.push(AgentHealth { agent_id: prev_id, active });
+                let agent = build_agent_health_from_meta(&prev_id, &meta_buf, &tails);
+                agents.push(agent);
             }
             return Ok(HealthResult { agents });
         }
@@ -951,26 +1034,74 @@ async fn get_health(mode: Option<String>, url: Option<String>, token: Option<Str
             let entry = agent_active.entry(agent_id).or_insert(false);
             if active { *entry = true; }
         }
-        let agents = agent_active.into_iter().map(|(agent_id, active)| AgentHealth { agent_id, active }).collect();
+        let agents = agent_active.into_iter().map(|(agent_id, active)| AgentHealth { agent_id, active, sessions: vec![] }).collect();
         return Ok(HealthResult { agents });
     }
 
-    // === local mode (original) ===
+    // === local mode — content-based detection with session-level data ===
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let agents_dir = std::path::PathBuf::from(&home).join(".openclaw/agents");
 
-    let active_set = lsof_active_agents().await;
+    let mut agents = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&agents_dir) else {
+        return Err("read agents dir".into());
+    };
+    for entry in entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()) {
+        let agent_id = entry.file_name().to_string_lossy().to_string();
+        let agent_dir = entry.path();
+        let sessions_dir = agent_dir.join("sessions");
+        let meta_path = sessions_dir.join("sessions.json");
 
-    let agents = std::fs::read_dir(&agents_dir)
-        .map_err(|e| format!("read agents dir: {}", e))?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .map(|entry| {
-            let agent_id = entry.file_name().to_string_lossy().to_string();
-            let active = active_set.contains(&agent_id);
-            AgentHealth { agent_id, active }
-        })
-        .collect();
+        // Try to read sessions.json and build per-session health
+        if meta_path.exists() {
+            if let Ok(meta_str) = std::fs::read_to_string(&meta_path) {
+                // Build tails map: basename → last 5 lines
+                let mut tails: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                if let Ok(rd) = std::fs::read_dir(&sessions_dir) {
+                    for fe in rd.filter_map(|e| e.ok()) {
+                        let p = fe.path();
+                        if p.extension().map_or(true, |ext| ext != "jsonl") { continue; }
+                        if let Ok(tail_out) = tokio::process::Command::new("tail")
+                            .args(["-5", &p.to_string_lossy()])
+                            .stdout(std::process::Stdio::piped())
+                            .stderr(std::process::Stdio::null())
+                            .output()
+                            .await
+                        {
+                            let tail_str = String::from_utf8_lossy(&tail_out.stdout);
+                            let lines: Vec<String> = tail_str.lines().map(|l| l.to_string()).collect();
+                            if let Some(fname) = p.file_name() {
+                                tails.insert(fname.to_string_lossy().to_string(), lines);
+                            }
+                        }
+                    }
+                }
+                let agent = build_agent_health_from_meta(&agent_id, &meta_str, &tails);
+                agents.push(agent);
+                continue;
+            }
+        }
+
+        // Fallback: no sessions.json, check most recent file only
+        let latest = std::fs::read_dir(&sessions_dir).ok()
+            .and_then(|rd| rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |ext| ext == "jsonl"))
+                .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok())));
+        let active = if let Some(f) = latest {
+            if let Ok(tail_out) = tokio::process::Command::new("tail")
+                .args(["-5", &f.path().to_string_lossy()])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .await
+            {
+                let tail_str = String::from_utf8_lossy(&tail_out.stdout);
+                let lines: Vec<String> = tail_str.lines().map(|l| l.to_string()).collect();
+                check_agent_active_from_lines(&lines)
+            } else { false }
+        } else { false };
+        agents.push(AgentHealth { agent_id, active, sessions: vec![] });
+    }
 
     Ok(HealthResult { agents })
 }
@@ -2875,21 +3006,80 @@ async fn get_active_sessions(mode: Option<String>, url: Option<String>, token: O
         let sh = ssh_host.as_deref().unwrap_or("");
         let su = ssh_user.as_deref().unwrap_or("");
         if !sh.is_empty() && !su.is_empty() {
-            let dirs_output = ssh_exec(sh, su, "ls -1 $HOME/.openclaw/agents/ 2>/dev/null").await.unwrap_or_default();
-            let mut active_keys: Vec<String> = vec![];
-            for agent_id in dirs_output.lines().filter(|l| !l.trim().is_empty()) {
-                let agent_id = agent_id.trim();
-                let sess_path = remote_sessions_json_path(agent_id);
-                let Ok(content) = ssh_read_file(sh, su, &sess_path).await else { continue };
-                let Ok(map): Result<serde_json::Map<String, serde_json::Value>, _> = serde_json::from_str(&content) else { continue };
-                for (key, val) in map.iter() {
-                    let session_file = val["sessionFile"].as_str().unwrap_or("");
-                    if session_file.is_empty() { continue; }
-                    if ssh_is_session_file_active(sh, su, session_file).await {
-                        active_keys.push(format!("{}:{}", agent_id, key));
+            // Step 1: Single SSH command to read all sessions.json files
+            let list_cmd = r#"for d in $HOME/.openclaw/agents/*/; do id=$(basename "$d"); sj="$d/sessions.json"; [ -f "$sj" ] || continue; echo "AGENT_SESSIONS:$id"; cat "$sj"; echo ""; echo "END_AGENT_SESSIONS"; done"#;
+            let list_output = ssh_exec(sh, su, list_cmd).await.unwrap_or_default();
+            log::info!("[get_active_sessions] remote step1 output len={}", list_output.len());
+
+            // Parse: collect (agentId, sessionKey, sessionFile) tuples
+            let mut to_check: Vec<(String, String, String)> = vec![];
+            let mut current_agent: Option<String> = None;
+            let mut json_buf = String::new();
+            for line in list_output.lines() {
+                if let Some(id) = line.strip_prefix("AGENT_SESSIONS:") {
+                    if let Some(prev_id) = current_agent.take() {
+                        if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&json_buf) {
+                            for (key, val) in map.iter() {
+                                if let Some(sf) = val["sessionFile"].as_str() {
+                                    if !sf.is_empty() { to_check.push((prev_id.clone(), key.clone(), sf.to_string())); }
+                                }
+                            }
+                        }
                     }
+                    current_agent = Some(id.to_string());
+                    json_buf.clear();
+                } else if line == "END_AGENT_SESSIONS" {
+                    if let Some(prev_id) = current_agent.take() {
+                        if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&json_buf) {
+                            for (key, val) in map.iter() {
+                                if let Some(sf) = val["sessionFile"].as_str() {
+                                    if !sf.is_empty() { to_check.push((prev_id.clone(), key.clone(), sf.to_string())); }
+                                }
+                            }
+                        }
+                    }
+                    json_buf.clear();
+                } else {
+                    json_buf.push_str(line);
+                    json_buf.push('\n');
                 }
             }
+
+            log::info!("[get_active_sessions] remote parsed {} sessions to check", to_check.len());
+            if to_check.is_empty() { return Ok(vec![]); }
+
+            // Step 2: Single SSH command to tail all session files
+            let check_parts: Vec<String> = to_check.iter().map(|(aid, key, sf)| {
+                format!("echo 'SESSION:{}:{}'; tail -5 '{}' 2>/dev/null; echo 'END_SESSION'", aid, key, sf)
+            }).collect();
+            let check_cmd = check_parts.join("\n");
+            let check_output = ssh_exec(sh, su, &check_cmd).await.unwrap_or_default();
+
+            // Parse: check each session's tail for activity
+            let mut active_keys: Vec<String> = vec![];
+            let mut current_session: Option<String> = None;
+            let mut lines_buf: Vec<String> = Vec::new();
+            for line in check_output.lines() {
+                if let Some(rest) = line.strip_prefix("SESSION:") {
+                    if let Some(prev_key) = current_session.take() {
+                        if check_agent_active_from_lines(&lines_buf) {
+                            active_keys.push(prev_key);
+                        }
+                    }
+                    current_session = Some(rest.to_string());
+                    lines_buf.clear();
+                } else if line == "END_SESSION" {
+                    if let Some(prev_key) = current_session.take() {
+                        if check_agent_active_from_lines(&lines_buf) {
+                            active_keys.push(prev_key);
+                        }
+                    }
+                    lines_buf.clear();
+                } else {
+                    lines_buf.push(line.to_string());
+                }
+            }
+            log::info!("[get_active_sessions] remote result: {:?}", active_keys);
             return Ok(active_keys);
         }
         // Gateway API fallback
@@ -2913,9 +3103,11 @@ async fn get_active_sessions(mode: Option<String>, url: Option<String>, token: O
         return Ok(keys);
     }
 
-    // === local mode (original) ===
+    // === local mode ===
+    // Use both lsof (process-based) and content-based detection for reliability.
+    // lsof works well for processes that hold files open (e.g. Claude Code),
+    // but OC gateway may write-and-close, so we fall back to content-based check.
     let open_paths = lsof_open_jsonl_paths().await;
-    if open_paths.is_empty() { return Ok(vec![]); }
 
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let agents_dir = std::path::PathBuf::from(&home).join(".openclaw/agents");
@@ -2937,8 +3129,25 @@ async fn get_active_sessions(mode: Option<String>, url: Option<String>, token: O
                 format!("{}/.openclaw/agents/{}/sessions/{}.jsonl", home, agent_id, session_id)
             } else { continue; };
 
-            if open_paths.iter().any(|p| p.starts_with(&file_path) || file_path.starts_with(p.as_str())) {
+            // Check 1: lsof detects file held open by a process
+            let lsof_active = open_paths.iter().any(|p| p.starts_with(&file_path) || file_path.starts_with(p.as_str()));
+            if lsof_active {
                 active_keys.push(format!("{}:{}", agent_id, key));
+                continue;
+            }
+            // Check 2: content-based — read last 5 lines via tail for efficiency
+            if let Ok(tail_out) = tokio::process::Command::new("tail")
+                .args(["-5", &file_path])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .await
+            {
+                let tail_str = String::from_utf8_lossy(&tail_out.stdout);
+                let lines: Vec<String> = tail_str.lines().map(|l| l.to_string()).collect();
+                if check_agent_active_from_lines(&lines) {
+                    active_keys.push(format!("{}:{}", agent_id, key));
+                }
             }
         }
     }

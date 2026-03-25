@@ -28,9 +28,15 @@ interface AgentInfo {
   identityEmoji?: string
 }
 
+interface SessionHealthInfo {
+  key: string
+  active: boolean
+}
+
 interface AgentHealth {
   agentId: string
   active: boolean
+  sessions?: SessionHealthInfo[]
 }
 
 interface MiniSessionInfo {
@@ -529,37 +535,77 @@ export default function Mini() {
     } catch (e) { console.warn('[fetchAgents] get_agents failed:', e) }
   }, [])
 
+  const lastOcSoundRef = useRef(0)
+  const playOcCompletionSound = useCallback((source: string) => {
+    console.log('[OC-SOUND] triggered from', source, 'soundEnabled:', soundEnabledRef.current)
+    if (!soundEnabledRef.current) return
+    const now = Date.now()
+    if (now - lastOcSoundRef.current < 5000) {
+      console.log('[OC-SOUND] deduped, last played', now - lastOcSoundRef.current, 'ms ago')
+      return
+    }
+    lastOcSoundRef.current = now
+    console.log('[OC-SOUND] PLAYING sound:', notifySoundRef.current)
+    if (notifySoundRef.current === 'manbo') {
+      new Audio('/audio/manbo.m4a').play().catch(() => {})
+    } else {
+      invoke('play_sound', { name: 'Purr' }).catch(() => {})
+    }
+  }, [])
+
   const prevHealthRef = useRef<Record<string, boolean>>({})
+  const prevSessionHealthRef = useRef<Record<string, boolean>>({})
   const pollHealth = useCallback(async () => {
     try {
       const connections = await loadOcConnections()
-      const hMap: Record<string, boolean> = {}
+      // Start with previous data — only overwrite for connections that succeed
+      const hMap: Record<string, boolean> = { ...prevHealthRef.current }
+      const sMap: Record<string, boolean> = { ...prevSessionHealthRef.current }
+      const freshKeys = new Set<string>() // session keys that got fresh data this round
       await Promise.all(connections.map(async (conn) => {
+        const prefix = connections.length > 1 ? `${conn.id.slice(0, 8)}:` : ''
         try {
           const oc = connToOcParams(conn)
-          const prefix = connections.length > 1 ? `${conn.id.slice(0, 8)}:` : ''
           const health = (await invoke('get_health', oc)) as { agents: AgentHealth[] }
-          health.agents.forEach((a) => { hMap[prefix + a.agentId] = a.active })
-        } catch { /* ignore */ }
-      }))
-      // Detect agent becoming inactive → play completion sound
-      const prev = prevHealthRef.current
-      if (Object.keys(prev).length > 0) {
-        const anyBecameInactive = Object.entries(prev).some(([id, wasActive]) => wasActive && !hMap[id])
-        if (anyBecameInactive && soundEnabledRef.current) {
-          if (notifySoundRef.current === 'manbo') {
-            new Audio('/audio/manbo.m4a').play().catch(() => {})
-          } else {
-            invoke('play_sound', { name: 'Purr' }).catch(() => {})
+          // Clear old entries for this connection, then fill fresh data
+          for (const k of Object.keys(hMap)) {
+            if (prefix === '' || k.startsWith(prefix)) delete hMap[k]
           }
+          for (const k of Object.keys(sMap)) {
+            if (prefix === '' || k.startsWith(prefix)) delete sMap[k]
+          }
+          health.agents.forEach((a) => {
+            hMap[prefix + a.agentId] = a.active
+            if (a.sessions) {
+              a.sessions.forEach((s) => {
+                const sk = `${prefix}${a.agentId}:${s.key}`
+                sMap[sk] = s.active
+                freshKeys.add(sk)
+              })
+            }
+          })
+        } catch { /* SSH failed — previous data preserved */ }
+      }))
+
+      // Detect session active→inactive transitions (only for fresh data)
+      const prev = prevSessionHealthRef.current
+      if (freshKeys.size > 0) {
+        const anyBecameInactive = Array.from(freshKeys).some(k => prev[k] === true && sMap[k] === false)
+        if (anyBecameInactive) {
+          console.log('[pollHealth] session became inactive, prev:', prev, 'curr:', sMap)
+          playOcCompletionSound('pollHealth')
         }
       }
+      prevSessionHealthRef.current = sMap
+
+      const anyActive = Object.values(sMap).some(v => v)
+      setAnySessionActive(anyActive)
+
       prevHealthRef.current = hMap
       setHealthMap(hMap)
     } catch { /* ignore */ }
-  }, [])
+  }, [playOcCompletionSound])
 
-  const prevActiveKeysRef = useRef<Set<string>>(new Set())
   const previewCacheRef = useRef<Map<string, { active: boolean; lastUserMsg?: string; lastAssistantMsg?: string; fetchedAt: number }>>(new Map())
   const previewQueueRef = useRef<string[]>([])
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -622,7 +668,8 @@ export default function Mini() {
       if (s.sessionFile) sessionFileMapRef.current.set(k, s.sessionFile)
       sessionAgentMapRef.current.set(k, s.agentId)
       const cached = previewCacheRef.current.get(k)
-      const stale = !cached || (Date.now() - cached.fetchedAt > 15000)
+      const staleTime = cached?.active ? 8000 : 15000 // poll active sessions faster
+      const stale = !cached || (Date.now() - cached.fetchedAt > staleTime)
       if (stale) queue.push(k)
     }
     // Prioritize active sessions first
@@ -643,67 +690,29 @@ export default function Mini() {
     return () => { clearInterval(a); clearInterval(h) }
   }, [fetchAgents, pollHealth])
 
-  const pollActiveStatus = useCallback(async () => {
-    try {
-      const connections = await loadOcConnections()
-      const hasRemote = connections.some(c => c.type === 'remote')
-      // If all connections are remote, skip heavy polling — active status comes from session previews
-      if (hasRemote && connections.every(c => c.type === 'remote')) {
-        const anyActive = Array.from(previewCacheRef.current.values()).some(c => c.active)
-        setAnySessionActive(anyActive)
-        return
-      }
-      // Poll local connections for active sessions
-      const allActiveKeys: string[] = []
-      for (const conn of connections) {
-        if (conn.type === 'remote') continue
-        try {
-          const oc = connToOcParams(conn)
-          const keys = (await invoke('get_active_sessions', oc)) as string[]
-          // Prefix keys with qualified agent ID prefix if multi-connection
-          const prefix = connections.length > 1 ? `${conn.id.slice(0, 8)}:` : ''
-          allActiveKeys.push(...keys.map(k => prefix + k))
-        } catch { /* ignore */ }
-      }
-      // Also check remote preview cache
-      if (hasRemote) {
-        for (const [k, c] of previewCacheRef.current.entries()) {
-          if (c.active) allActiveKeys.push(k)
-        }
-      }
-      const activeKeys = allActiveKeys
-      setAnySessionActive(activeKeys.length > 0)
-      const activeSet = new Set(activeKeys)
-      const prevSet = prevActiveKeysRef.current
-      const anyBecameInactive = Array.from(prevSet).some(k => !activeSet.has(k))
-      prevActiveKeysRef.current = activeSet
-      setAllSessions(prev => {
-        let changed = false
-        const updated = prev.map(s => {
-          const key = `${s.agentId}:${s.key}`
-          const isActive = activeSet.has(key)
-          if (s.active !== isActive) { changed = true; return { ...s, active: isActive } }
-          return s
-        })
-        if (!changed) return prev
-        updated.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0) || b.updatedAt - a.updatedAt)
-        return updated
+  // Update allSessions active states from pollHealth session data
+  const syncSessionActiveStates = useCallback(() => {
+    const sMap = prevSessionHealthRef.current
+    if (Object.keys(sMap).length === 0) return
+    setAllSessions(prev => {
+      let changed = false
+      const updated = prev.map(s => {
+        const key = `${s.agentId}:${s.key}`
+        const isActive = !!sMap[key]
+        if (s.active !== isActive) { changed = true; return { ...s, active: isActive } }
+        return s
       })
-      if (anyBecameInactive && soundEnabledRef.current) {
-        if (notifySoundRef.current === 'manbo') {
-          new Audio('/audio/manbo.m4a').play().catch(() => {})
-        } else {
-          invoke('play_sound', { name: 'Purr' }).catch(() => {})
-        }
-      }
-    } catch { /* ignore */ }
+      if (!changed) return prev
+      updated.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0) || b.updatedAt - a.updatedAt)
+      return updated
+    })
   }, [])
 
   useEffect(() => {
-    pollActiveStatus()
-    const t = setInterval(pollActiveStatus, 1000)
+    syncSessionActiveStates()
+    const t = setInterval(syncSessionActiveStates, 2000)
     return () => clearInterval(t)
-  }, [pollActiveStatus])
+  }, [syncSessionActiveStates])
 
   const drainPreviewQueue = useCallback(async () => {
     if (previewTimerRef.current) { clearTimeout(previewTimerRef.current); previewTimerRef.current = null }
@@ -723,8 +732,6 @@ export default function Mini() {
       invoke('get_session_preview', { sessionFile, ...oc })
         .then((preview) => {
           const p = preview as SessionPreview
-          const prevCache = previewCacheRef.current.get(k)
-          const becameInactive = prevCache && prevCache.active && !p.active
           previewCacheRef.current.set(k, { ...p, fetchedAt: Date.now() })
           setAllSessions(prev => prev.map(s => {
             if (`${s.agentId}:${s.key}` === k) {
@@ -732,13 +739,6 @@ export default function Mini() {
             }
             return s
           }))
-          if (becameInactive && soundEnabledRef.current) {
-            if (notifySoundRef.current === 'manbo') {
-              new Audio('/audio/manbo.m4a').play().catch(() => {})
-            } else {
-              invoke('play_sound', { name: 'Purr' }).catch(() => {})
-            }
-          }
         })
         .catch(() => { /* ignore */ })
         .finally(() => {
@@ -748,7 +748,7 @@ export default function Mini() {
         })
     }
     processNext(0)
-  }, [])
+  }, [playOcCompletionSound])
 
   useEffect(() => {
     if (!expanded) return

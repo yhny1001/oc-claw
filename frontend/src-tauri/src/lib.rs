@@ -2227,7 +2227,7 @@ fn clean_user_message(text: &str) -> String {
     // Formats:
     //   1) With [message_id:...] line → actual message is after "Name: msg"
     //   2) Without [message_id:] but has ``` blocks → actual message is after last ```
-    if s.contains("Conversation info (untrusted metadata)") || s.contains("[message_id:") {
+    if s.contains("(untrusted metadata)") || s.contains("Conversation info (untrusted metadata)") || s.contains("[message_id:") {
         if let Some(idx) = s.rfind("[message_id:") {
             if let Some(nl) = s[idx..].find('\n') {
                 let after = s[idx + nl + 1..].trim();

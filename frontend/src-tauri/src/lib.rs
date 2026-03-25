@@ -2071,6 +2071,86 @@ unsafe fn get_notch_offset(screen: *mut objc2::runtime::AnyObject) -> f64 {
     80.0
 }
 
+/// Move the mini window by a delta (dx, dy in CSS/logical points).
+/// dy is in screen coordinates (positive = downward), converted to macOS (positive = upward).
+#[tauri::command]
+async fn move_mini_by(app: tauri::AppHandle, dx: f64, dy: f64) -> Result<(), String> {
+    let win = app.get_webview_window("mini").ok_or("mini window not found")?;
+    #[cfg(target_os = "macos")]
+    {
+        let win_clone = win.clone();
+        app.run_on_main_thread(move || {
+            use objc2::runtime::AnyObject;
+            use objc2::msg_send;
+            use objc2_foundation::{NSRect, NSPoint, NSSize};
+            if let Ok(ns_win) = win_clone.ns_window() {
+                let obj = unsafe { &*(ns_win as *mut AnyObject) };
+                let frame: NSRect = unsafe { msg_send![obj, frame] };
+                let new_frame = NSRect::new(
+                    NSPoint::new(frame.origin.x + dx, frame.origin.y - dy),
+                    NSSize::new(frame.size.width, frame.size.height),
+                );
+                unsafe {
+                    let _: () = msg_send![obj, setFrame: new_frame, display: true, animate: false];
+                }
+            }
+        }).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Get the mini window's origin in macOS logical coordinates (bottom-left origin).
+#[tauri::command]
+async fn get_mini_origin(app: tauri::AppHandle) -> Result<(f64, f64), String> {
+    let win = app.get_webview_window("mini").ok_or("mini not found")?;
+    #[cfg(target_os = "macos")]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let win_clone = win.clone();
+        app.run_on_main_thread(move || {
+            use objc2::runtime::AnyObject;
+            use objc2::msg_send;
+            use objc2_foundation::NSRect;
+            if let Ok(ns_win) = win_clone.ns_window() {
+                let obj = unsafe { &*(ns_win as *mut AnyObject) };
+                let frame: NSRect = unsafe { msg_send![obj, frame] };
+                let _ = tx.send((frame.origin.x, frame.origin.y));
+            }
+        }).map_err(|e| e.to_string())?;
+        if let Ok(pos) = rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            return Ok(pos);
+        }
+    }
+    Err("failed to get origin".into())
+}
+
+/// Set the mini window's origin in macOS logical coordinates (bottom-left origin).
+#[tauri::command]
+async fn set_mini_origin(app: tauri::AppHandle, x: f64, y: f64) -> Result<(), String> {
+    let win = app.get_webview_window("mini").ok_or("mini not found")?;
+    #[cfg(target_os = "macos")]
+    {
+        let win_clone = win.clone();
+        app.run_on_main_thread(move || {
+            use objc2::runtime::AnyObject;
+            use objc2::msg_send;
+            use objc2_foundation::{NSRect, NSPoint, NSSize};
+            if let Ok(ns_win) = win_clone.ns_window() {
+                let obj = unsafe { &*(ns_win as *mut AnyObject) };
+                let frame: NSRect = unsafe { msg_send![obj, frame] };
+                let new_frame = NSRect::new(
+                    NSPoint::new(x, y),
+                    NSSize::new(frame.size.width, frame.size.height),
+                );
+                unsafe {
+                    let _: () = msg_send![obj, setFrame: new_frame, display: true, animate: false];
+                }
+            }
+        }).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Resize/reposition the mini window between collapsed (small, right of notch)
 /// and expanded (larger, centered on notch) states.
 #[tauri::command]
@@ -3682,7 +3762,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_status, send_chat, open_detail_panel, save_character_gif, delete_character_assets, delete_character_gif, get_agents, get_health, get_agent_metrics, interrupt_agent, scan_characters, get_agent_extra_info, open_mini, close_mini, set_mini_expanded, set_mini_size, get_agent_sessions, get_session_preview, get_session_messages, get_active_sessions, proxy_post, play_sound, get_claude_sessions, get_claude_conversation, install_claude_hooks, remove_claude_session, open_url, check_for_update, run_update, close_ssh])
+        .invoke_handler(tauri::generate_handler![get_status, send_chat, open_detail_panel, save_character_gif, delete_character_assets, delete_character_gif, get_agents, get_health, get_agent_metrics, interrupt_agent, scan_characters, get_agent_extra_info, open_mini, close_mini, set_mini_expanded, set_mini_size, move_mini_by, get_mini_origin, set_mini_origin, get_agent_sessions, get_session_preview, get_session_messages, get_active_sessions, proxy_post, play_sound, get_claude_sessions, get_claude_conversation, install_claude_hooks, remove_claude_session, open_url, check_for_update, run_update, close_ssh])
         .manage(ActiveAgentPid { pid: Mutex::new(None) })
         .manage(ClaudeState { sessions: Arc::new(Mutex::new(HashMap::new())) })
         .run(tauri::generate_context!())

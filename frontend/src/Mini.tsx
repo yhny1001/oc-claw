@@ -445,6 +445,8 @@ export default function Mini() {
   const [hiding, setHiding] = useState(false)
   const [pinned, setPinned] = useState(false)
   const collapsingRef = useRef(false)
+  const customPosRef = useRef<{ x: number; y: number } | null>(null)
+  const [moveMode, setMoveMode] = useState(false)
 
   // Bob animation (only when collapsed, avoid 60fps re-renders in settings mode)
   useEffect(() => {
@@ -820,8 +822,10 @@ export default function Mini() {
   })
   const sessionSlots = [...ocSlots, ...claudeSlots].slice(0, MAX_SLOTS)
 
+  const expandingRef = useRef(false)
   const expand = useCallback(async () => {
-    if (collapsingRef.current) return
+    if (collapsingRef.current || expandingRef.current) return
+    expandingRef.current = true
     setHiding(true)
     await new Promise<void>((r) => setTimeout(r, 50))
     await invoke('set_mini_expanded', { expanded: true, position: mascotPositionRef.current })
@@ -830,6 +834,86 @@ export default function Mini() {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => setShowPanel(true))
     })
+    expandingRef.current = false
+  }, [])
+
+  const handleMascotPointerDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0 || collapsingRef.current) return
+
+    // Normal mode: click to expand
+    if (!moveMode) {
+      expand()
+      return
+    }
+
+    // Move mode: drag to reposition, click to exit
+    e.preventDefault()
+    const el = e.currentTarget as HTMLElement
+    el.setPointerCapture(e.pointerId)
+
+    let lastX = e.screenX
+    let lastY = e.screenY
+    let dragging = false
+    const pid = e.pointerId
+
+    const onMove = (ev: PointerEvent) => {
+      if (!dragging) {
+        if (Math.abs(ev.screenX - lastX) + Math.abs(ev.screenY - lastY) > 3) {
+          dragging = true
+        } else return
+      }
+      const dx = ev.screenX - lastX
+      const dy = ev.screenY - lastY
+      lastX = ev.screenX
+      lastY = ev.screenY
+      if (dx !== 0 || dy !== 0) invoke('move_mini_by', { dx, dy })
+    }
+
+    const cleanup = () => {
+      try { el.releasePointerCapture(pid) } catch {}
+      el.removeEventListener('pointermove', onMove)
+      el.removeEventListener('pointerup', onUp)
+      el.removeEventListener('lostpointercapture', cleanup)
+    }
+
+    const onUp = () => {
+      cleanup()
+      if (!dragging) {
+        // Click without moving: exit move mode
+        setMoveMode(false)
+        // Force browser to re-evaluate cursor immediately
+        document.body.style.cursor = 'pointer'
+        requestAnimationFrame(() => { document.body.style.cursor = '' })
+      } else {
+        // Save dragged position (macOS native coordinates)
+        invoke('get_mini_origin').then((pos) => {
+          const [x, y] = pos as [number, number]
+          customPosRef.current = { x, y }
+        })
+      }
+    }
+
+    el.addEventListener('pointermove', onMove)
+    el.addEventListener('pointerup', onUp)
+    el.addEventListener('lostpointercapture', cleanup)
+  }, [expand, moveMode])
+
+  const enterMoveMode = useCallback(async () => {
+    setShowPanel(false)
+    setTimeout(async () => {
+      setHiding(true)
+      setExpanded(false)
+      try {
+        await new Promise<void>((r) => setTimeout(r, 50))
+        await invoke('set_mini_expanded', { expanded: false, position: mascotPositionRef.current })
+        if (customPosRef.current) {
+          await invoke('set_mini_origin', customPosRef.current)
+        }
+        await new Promise<void>((r) => setTimeout(r, 50))
+      } catch {}
+      setHiding(false)
+      setMoveMode(true)
+    }, 350)
   }, [])
 
   const collapse = useCallback(async () => {
@@ -857,6 +941,10 @@ export default function Mini() {
           await invoke('set_mini_expanded', { expanded: false, position: mascotPositionRef.current })
         }
         await new Promise<void>((r) => setTimeout(r, 50))
+        // Restore custom drag position if set
+        if (customPosRef.current) {
+          await invoke('set_mini_origin', customPosRef.current)
+        }
       } catch { /* ensure hiding is always cleared */ }
       setHiding(false)
       // Brief cooldown to prevent focus event from immediately re-expanding
@@ -938,14 +1026,22 @@ export default function Mini() {
 
 
   useEffect(() => {
-    if (expanded) return
+    if (expanded || moveMode) return
     const onFocus = () => {
       if (collapsingRef.current) return
       expand()
     }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-  }, [expanded, expand])
+  }, [expanded, expand, moveMode])
+
+  // Exit move mode when clicking outside mascot or when window loses focus
+  useEffect(() => {
+    if (!moveMode) return
+    const onBlur = () => setMoveMode(false)
+    window.addEventListener('blur', onBlur)
+    return () => window.removeEventListener('blur', onBlur)
+  }, [moveMode])
 
   const claudeWaiting = claudeSessions.some(cs => cs.status === 'waiting')
   const claudeCompacting = claudeSessions.some(cs => cs.status === 'compacting')
@@ -978,11 +1074,11 @@ export default function Mini() {
       {!expanded && !hiding && (
         <div
           id="mini-panel"
-          onClick={() => expand()}
+          onPointerDown={handleMascotPointerDown}
           style={{
             width: '100%', height: '100%',
             display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
-            cursor: 'pointer',
+            cursor: moveMode ? 'grab' : 'pointer',
             pointerEvents: 'auto',
           }}
         >
@@ -990,6 +1086,12 @@ export default function Mini() {
             transform: `translateY(${bobY}px)`,
             transition: 'transform 0.1s ease',
             position: 'relative',
+            ...(moveMode ? {
+              borderRadius: 12,
+              outline: '2px solid rgba(59,130,246,0.6)',
+              outlineOffset: -2,
+              animation: 'movePulse 1.2s ease-in-out infinite',
+            } : {}),
           }}>
             {miniGif ? (
               disableSleepAnim && mainPetState === 'idle' ? (
@@ -1166,6 +1268,21 @@ export default function Mini() {
                       <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
                       <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
                       {!soundEnabled && <line x1="1" y1="1" x2="23" y2="23" strokeWidth="3"/>}
+                    </svg>
+                  </button>
+                )}
+                {!settingsMode && (
+                  <button data-no-drag
+                    onClick={(e) => { e.stopPropagation(); enterMoveMode() }}
+                    style={{
+                      background: 'none', border: 'none',
+                      color: 'rgba(255,255,255,0.35)', fontSize: 14,
+                      cursor: 'pointer', padding: '4px 6px',
+                    }}
+                    title="移动看板娘"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M5 9l-3 3 3 3"/><path d="M9 5l3-3 3 3"/><path d="M15 19l-3 3-3-3"/><path d="M19 9l3 3-3 3"/><path d="M2 12h20"/><path d="M12 2v20"/>
                     </svg>
                   </button>
                 )}

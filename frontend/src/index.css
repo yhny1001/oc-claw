@@ -17,6 +17,11 @@ input, textarea, pre, [contenteditable], .selectable-text, .selectable-text * {
   display: none;
 }
 
+@keyframes movePulse {
+  0%, 100% { outline-color: rgba(59,130,246,0.6); }
+  50% { outline-color: rgba(59,130,246,0.15); }
+}
+
 @keyframes miniPulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.75); }

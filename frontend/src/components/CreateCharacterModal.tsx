@@ -291,35 +291,37 @@ export function CreateCharacterModal({ isOpen, onClose, onSaved }: Props) {
                 </div>
               </div>
 
-              {error && (
-                <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg p-3">{error}</div>
-              )}
             </div>
           )}
         </div>
 
         {/* Footer */}
         {step === 'tuning' && (
-          <div className="p-4 border-t border-white/5 flex justify-end gap-3 bg-black/20 shrink-0">
-            <button
-              onClick={() => { setStep('upload'); setRows([]); setError('') }}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition-colors"
-            >
-              重新上传
-            </button>
-            <button
-              onClick={onClose}
-              className="px-4 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition-colors"
-            >
-              取消
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={!name.trim() || saving}
-              className="px-6 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {saving ? '保存中...' : '保存角色'}
-            </button>
+          <div className="p-4 border-t border-white/5 flex items-center gap-3 bg-black/20 shrink-0">
+            {error && (
+              <div className="text-xs text-red-400 flex-1 truncate">{error}</div>
+            )}
+            <div className="flex items-center gap-3 ml-auto">
+              <button
+                onClick={() => { setStep('upload'); setRows([]); setError('') }}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+              >
+                重新上传
+              </button>
+              <button
+                onClick={onClose}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white/60 hover:text-white hover:bg-white/5 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={!name.trim() || saving}
+                className="px-6 py-2 rounded-lg text-sm font-medium bg-white text-black hover:bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {saving ? '保存中...' : '保存角色'}
+              </button>
+            </div>
           </div>
         )}
       </div>

@@ -216,7 +216,7 @@ function getMiniGif(char: CharacterMeta | undefined, petState: PetState | boolea
   return idleGifs[0] || allGifs[0]
 }
 
-function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, onToggle, onOpenCreate }: {
+function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, onToggle, onOpenCreate, onDeleteChar }: {
   agent: AgentInfo
   characters: CharacterMeta[]
   currentChar: string
@@ -224,6 +224,7 @@ function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, 
   isOpen: boolean
   onToggle: () => void
   onOpenCreate?: () => void
+  onDeleteChar?: (name: string) => void
 }) {
   const [isEditing, setIsEditing] = useState(false)
   const charsWithMini = characters.filter((c) => c.miniActions && Object.keys(c.miniActions).length > 0)
@@ -309,9 +310,11 @@ function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, 
                     const ip = c.ip || '自定义'
                     if (!ipOrder.includes(ip)) ipOrder.push(ip)
                   }
-                  // 自定义 always first
+                  // 自定义 always first, 其他 always last
                   const customIdx = ipOrder.indexOf('自定义')
                   if (customIdx > 0) { ipOrder.splice(customIdx, 1); ipOrder.unshift('自定义') }
+                  const otherIdx = ipOrder.indexOf('其他')
+                  if (otherIdx >= 0 && otherIdx < ipOrder.length - 1) { ipOrder.splice(otherIdx, 1); ipOrder.push('其他') }
                   for (const ip of ipOrder) {
                     groups.push({ ip, chars: charsWithMini.filter((c) => (c.ip || '自定义') === ip) })
                   }
@@ -328,7 +331,7 @@ function AgentAccordionItem({ agent, characters, currentChar, onSelect, isOpen, 
                               key={c.name}
                               onClick={() => {
                                 if (isEditing && !isDefault) {
-                                  // TODO: delete character
+                                  onDeleteChar?.(c.name)
                                 } else if (!isEditing) {
                                   onSelect(c.name)
                                 }
@@ -506,6 +509,7 @@ export default function Mini() {
     } catch { /* ignore */ }
   }, [])
 
+  const prevActiveKeysRef = useRef<Set<string>>(new Set())
   const previewCacheRef = useRef<Map<string, { active: boolean; lastUserMsg?: string; lastAssistantMsg?: string; fetchedAt: number }>>(new Map())
   const previewQueueRef = useRef<string[]>([])
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -597,6 +601,9 @@ export default function Mini() {
       const activeKeys = (await invoke('get_active_sessions', oc)) as string[]
       setAnySessionActive(activeKeys.length > 0)
       const activeSet = new Set(activeKeys)
+      const prevSet = prevActiveKeysRef.current
+      const anyBecameInactive = Array.from(prevSet).some(k => !activeSet.has(k))
+      prevActiveKeysRef.current = activeSet
       setAllSessions(prev => {
         let changed = false
         const updated = prev.map(s => {
@@ -609,6 +616,13 @@ export default function Mini() {
         updated.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0) || b.updatedAt - a.updatedAt)
         return updated
       })
+      if (anyBecameInactive && soundEnabledRef.current) {
+        if (notifySoundRef.current === 'manbo') {
+          new Audio('/audio/manbo.m4a').play().catch(() => {})
+        } else {
+          invoke('play_sound', { name: 'Purr' }).catch(() => {})
+        }
+      }
     } catch { /* ignore */ }
   }, [])
 
@@ -636,6 +650,8 @@ export default function Mini() {
       invoke('get_session_preview', { sessionFile, ...oc })
         .then((preview) => {
           const p = preview as SessionPreview
+          const prevCache = previewCacheRef.current.get(k)
+          const becameInactive = prevCache && prevCache.active && !p.active
           previewCacheRef.current.set(k, { ...p, fetchedAt: Date.now() })
           setAllSessions(prev => prev.map(s => {
             if (`${s.agentId}:${s.key}` === k) {
@@ -643,6 +659,13 @@ export default function Mini() {
             }
             return s
           }))
+          if (becameInactive && soundEnabledRef.current) {
+            if (notifySoundRef.current === 'manbo') {
+              new Audio('/audio/manbo.m4a').play().catch(() => {})
+            } else {
+              invoke('play_sound', { name: 'Purr' }).catch(() => {})
+            }
+          }
         })
         .catch(() => { /* ignore */ })
         .finally(() => {
@@ -932,6 +955,13 @@ export default function Mini() {
   const mainPetState: PetState = claudeWaiting ? 'waiting' : claudeCompacting ? 'compacting' : hasWorking ? 'working' : 'idle'
   const bobY = (disableSleepAnim && mainPetState === 'idle') ? 0 : bobYRaw
   const miniGif = getMiniGif(miniChar ?? undefined, mainPetState, true)
+  const handleDeleteChar = useCallback(async (name: string) => {
+    try {
+      await invoke('delete_character_assets', { name })
+      const chars = await loadCharacters()
+      setCharacters(chars)
+    } catch (e) { console.warn('delete char failed:', e) }
+  }, [])
   const inAgentDetail = selectedAgentId !== null
   const selectedAgent = agents.find(a => a.id === selectedAgentId)
 
@@ -1182,6 +1212,7 @@ export default function Mini() {
                               isOpen={openAccordionId === '__mini__'}
                               onToggle={() => setOpenAccordionId(openAccordionId === '__mini__' ? null : '__mini__')}
                               onOpenCreate={() => setIsCreateModalOpen(true)}
+                              onDeleteChar={handleDeleteChar}
                               onSelect={async (name) => {
                                 const store = await load('settings.json', { defaults: {}, autoSave: true })
                                 await store.set('mini_character', name)
@@ -1209,6 +1240,7 @@ export default function Mini() {
                                     isOpen={openAccordionId === agent.id}
                                     onToggle={() => setOpenAccordionId(openAccordionId === agent.id ? null : agent.id)}
                                     onOpenCreate={() => setIsCreateModalOpen(true)}
+                                    onDeleteChar={handleDeleteChar}
                                     onSelect={async (charName) => {
                                       const updated = { ...agentCharMap, [agent.id]: charName }
                                       setAgentCharMap(updated)
@@ -1233,6 +1265,7 @@ export default function Mini() {
                                 isOpen={openAccordionId === 'claude-code'}
                                 onToggle={() => setOpenAccordionId(openAccordionId === 'claude-code' ? null : 'claude-code')}
                                 onOpenCreate={() => setIsCreateModalOpen(true)}
+                                onDeleteChar={handleDeleteChar}
                                 onSelect={async (charName) => {
                                   setClaudeCharName(charName)
                                   const store = await load('settings.json', { defaults: {}, autoSave: true })

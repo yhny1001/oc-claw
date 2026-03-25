@@ -3543,6 +3543,11 @@ pub fn run() {
             // Fix PATH so openclaw (Node.js script) and node are both reachable
             fix_path();
 
+            // Install Claude Code hooks on every startup (idempotent)
+            if let Err(e) = tauri::async_runtime::block_on(install_claude_hooks()) {
+                log::warn!("Failed to install Claude hooks on startup: {}", e);
+            }
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

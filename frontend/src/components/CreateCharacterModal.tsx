@@ -127,23 +127,14 @@ export function CreateCharacterModal({ isOpen, onClose, onSaved }: Props) {
     setStep('processing')
     setError('')
     try {
-      const { convertFileSrc } = await import('@tauri-apps/api/core')
-      const url = convertFileSrc(filePath)
-      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const image = new Image()
-        image.onload = () => resolve(image)
-        image.onerror = () => reject(new Error('无法加载图片'))
-        image.src = url
-      })
-      const canvas = document.createElement('canvas')
-      canvas.width = img.width
-      canvas.height = img.height
-      canvas.getContext('2d')!.drawImage(img, 0, 0)
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob((b) => b ? resolve(b) : reject(new Error('转换失败')), 'image/png')
-      })
+      const b64 = await invoke('read_local_file', { path: filePath }) as string
+      const binary = atob(b64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+      const ext = filePath.split('.').pop()?.toLowerCase() || 'png'
+      const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png'
       const fileName = filePath.split('/').pop() || 'image.png'
-      processFile(new File([blob], fileName, { type: 'image/png' }))
+      processFile(new File([bytes], fileName, { type: mime }))
     } catch {
       setError('无法读取拖拽的文件')
       setStep('upload')

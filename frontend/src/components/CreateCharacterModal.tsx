@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { X, Upload, ExternalLink, Loader2 } from 'lucide-react'
 import {
   sliceSprite, groupFramesByRow, applyChromaKey, drawFrameWithOffset,
@@ -73,9 +74,8 @@ export function CreateCharacterModal({ isOpen, onClose, onSaved }: Props) {
     }
   }, [isOpen])
 
-  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !pipeline) return
+  const processFile = useCallback(async (file: File) => {
+    if (!pipeline) return
     setStep('processing')
     setError('')
 
@@ -121,6 +121,87 @@ export function CreateCharacterModal({ isOpen, onClose, onSaved }: Props) {
       setStep('upload')
     }
   }, [pipeline])
+
+  const processFilePath = useCallback(async (filePath: string) => {
+    if (!pipeline) return
+    setStep('processing')
+    setError('')
+    try {
+      const { convertFileSrc } = await import('@tauri-apps/api/core')
+      const url = convertFileSrc(filePath)
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image()
+        image.onload = () => resolve(image)
+        image.onerror = () => reject(new Error('无法加载图片'))
+        image.src = url
+      })
+      const canvas = document.createElement('canvas')
+      canvas.width = img.width
+      canvas.height = img.height
+      canvas.getContext('2d')!.drawImage(img, 0, 0)
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((b) => b ? resolve(b) : reject(new Error('转换失败')), 'image/png')
+      })
+      const fileName = filePath.split('/').pop() || 'image.png'
+      processFile(new File([blob], fileName, { type: 'image/png' }))
+    } catch {
+      setError('无法读取拖拽的文件')
+      setStep('upload')
+    }
+  }, [pipeline, processFile])
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) processFile(file)
+  }, [processFile])
+
+  const [isDragging, setIsDragging] = useState(false)
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) processFile(file)
+  }, [processFile])
+
+  // Tauri native file drop (OS-level drag from Finder etc.)
+  useEffect(() => {
+    if (!isOpen || step !== 'upload') return
+    let cancelled = false
+    const setup = async () => {
+      try {
+        const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+          if (cancelled) return
+          if (event.payload.type === 'over') setIsDragging(true)
+          if (event.payload.type === 'leave' || event.payload.type === 'cancel') setIsDragging(false)
+          if (event.payload.type === 'drop') {
+            setIsDragging(false)
+            const paths = event.payload.paths
+            const imgPath = paths.find((p: string) => /\.(png|jpe?g|webp|gif|bmp)$/i.test(p))
+            if (imgPath) processFilePath(imgPath)
+          }
+        })
+        if (cancelled) unlisten()
+        else cleanupRef.current = unlisten
+      } catch {}
+    }
+    const cleanupRef = { current: () => {} }
+    setup()
+    return () => { cancelled = true; cleanupRef.current() }
+  }, [isOpen, step, processFilePath])
 
   const updateOffset = (rowIdx: number, axis: 'dx' | 'dy', delta: number) => {
     setRows((prev) => prev.map((r, i) => i === rowIdx ? { ...r, offset: { ...r.offset, [axis]: r.offset[axis] + delta } } : r))
@@ -207,9 +288,20 @@ export function CreateCharacterModal({ isOpen, onClose, onSaved }: Props) {
                   <span className="flex items-center justify-center w-5 h-5 rounded-full bg-white/10 text-xs font-mono">2</span>
                   上传图片进行自动切分
                 </div>
-                <label className="mt-2 ml-7 flex flex-col items-center justify-center h-40 border-2 border-dashed border-white/10 rounded-xl hover:border-white/30 hover:bg-white/5 transition-all cursor-pointer group">
-                  <Upload className="w-8 h-8 text-white/30 group-hover:text-white/60 mb-3 transition-colors" />
-                  <span className="text-sm text-white/50 group-hover:text-white/80 transition-colors">点击或拖拽上传图片</span>
+                <label
+                  className={`mt-2 ml-7 flex flex-col items-center justify-center h-40 border-2 border-dashed rounded-xl transition-all cursor-pointer group ${
+                    isDragging
+                      ? 'border-blue-400 bg-blue-400/10'
+                      : 'border-white/10 hover:border-white/30 hover:bg-white/5'
+                  }`}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                >
+                  <Upload className={`w-8 h-8 mb-3 transition-colors ${isDragging ? 'text-blue-400' : 'text-white/30 group-hover:text-white/60'}`} />
+                  <span className={`text-sm transition-colors ${isDragging ? 'text-blue-400' : 'text-white/50 group-hover:text-white/80'}`}>
+                    {isDragging ? '松开以上传图片' : '点击或拖拽上传图片'}
+                  </span>
                   <span className="text-xs text-white/30 mt-1">支持 PNG, JPG, WEBP</span>
                   <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
                 </label>

@@ -54,7 +54,7 @@ export function CreateCharacterModal({ isOpen, onClose, onSaved }: Props) {
   const [name, setName] = useState('')
   const [rows, setRows] = useState<RowData[]>([])
   const [pipeline, setPipeline] = useState<PipelineConfig | null>(null)
-  const [fps] = useState(1)
+  const [fps, setFps] = useState(4)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [existingNames, setExistingNames] = useState<string[]>([])
@@ -328,6 +328,19 @@ export function CreateCharacterModal({ isOpen, onClose, onSaved }: Props) {
                   className="bg-black/50 border border-white/10 rounded-lg px-4 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/30 transition-colors"
                 />
                 <datalist id="char-name-list-modal">{existingNames.map((n) => <option key={n} value={n} />)}</datalist>
+              </div>
+
+              {/* FPS slider */}
+              <div className="flex flex-col gap-2">
+                <label className="text-sm text-white/80 font-medium">动画速度 (FPS)</label>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="range" min="1" max="12" value={fps}
+                    onChange={(e) => setFps(+e.target.value)}
+                    className="flex-1 h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
+                  />
+                  <span className="text-sm font-medium text-white/80 font-mono w-6 text-right">{fps}</span>
+                </div>
               </div>
 
               {/* Row previews with offset controls */}
